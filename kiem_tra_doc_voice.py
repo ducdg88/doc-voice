@@ -50,7 +50,6 @@ class KiemTraDocVoice(unittest.TestCase):
         cau_goc = "Hello world"
         dich = doc_voice.dich_tieng_viet(cau_goc)
         self.assertTrue(len(dich.strip()) > 0)
-        print("Ket qua dich thu nghiem:", dich)
 
 if __name__ == "__main__":
     unittest.main()
