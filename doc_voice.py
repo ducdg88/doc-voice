@@ -202,6 +202,13 @@ def gio_srt(giay):
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
+def tinh_do_dai_doan(mp3, cau):
+    """Tính độ dài đoạn audio: ưu tiên mốc câu của Microsoft Neural, dự phòng theo kích thước mp3."""
+    if cau:
+        return max(bd + dai for bd, dai, _ in cau)
+    return len(mp3) / BYTE_MOI_GIAY
+
+
 def tao_srt(ket_qua, tu_dien=({}, ())):
     """ket_qua: [(mp3, [(bắt_đầu_giây, dài_giây, câu)])] theo thứ tự đoạn.
     tu_dien: (bản đồ câu, từ điển dự phòng) để trả phụ đề về chữ gốc."""
@@ -212,7 +219,7 @@ def tao_srt(ket_qua, tu_dien=({}, ())):
             so += 1
             chu = ban_do.get(chuan_cau(chu)) or tra_chu_goc(chu, du_phong)
             dong.append(f"{so}\n{gio_srt(lech + bd)} --> {gio_srt(lech + bd + dai)}\n{chu}\n")
-        lech += len(mp3) / BYTE_MOI_GIAY
+        lech += tinh_do_dai_doan(mp3, cau)
     return "\n".join(dong)
 
 
@@ -224,7 +231,7 @@ def lay_danh_sach_cau(ket_qua, tu_dien=({}, ())):
         for bd, dai, chu in cau:
             chu_that = ban_do.get(chuan_cau(chu)) or tra_chu_goc(chu, du_phong)
             cau_list.append((lech + bd, lech + bd + dai, chu_that.strip()))
-        lech += len(mp3) / BYTE_MOI_GIAY
+        lech += tinh_do_dai_doan(mp3, cau)
     return cau_list
 
 
@@ -235,19 +242,23 @@ def dich_tieng_viet(van_ban):
     cac_doan = [d for d in chia_doan(van_ban, toi_da=1800) if d.strip()]
     ket_qua = []
     for doan in cac_doan:
-        params = urllib.parse.urlencode({
-            "client": "gtx",
-            "sl": "auto",
-            "tl": "vi",
-            "dt": "t",
-            "q": doan
-        })
-        url = f"https://translate.googleapis.com/translate_a/single?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read().decode("utf-8"))
-            dich_doan = "".join(item[0] for item in data[0] if item and item[0])
-            ket_qua.append(dich_doan)
+        try:
+            params = urllib.parse.urlencode({
+                "client": "gtx",
+                "sl": "auto",
+                "tl": "vi",
+                "dt": "t",
+                "q": doan
+            })
+            url = f"https://translate.googleapis.com/translate_a/single?{params}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read().decode("utf-8"))
+                if data and isinstance(data, list) and data[0]:
+                    dich_doan = "".join(item[0] for item in data[0] if item and isinstance(item, list) and item[0])
+                    ket_qua.append(dich_doan)
+        except Exception as e:
+            raise RuntimeError(f"Lỗi dịch đoạn '{doan[:30]}...': {e}")
     return "\n\n".join(ket_qua)
 
 
@@ -651,8 +662,12 @@ class App(tk.Tk):
 
     # --- highlight và phát âm thanh ---
     def _xoa_highlight(self):
-        self.o_chu.tag_remove("dang_doc", "1.0", "end")
-        self.o_dich.tag_remove("dang_doc", "1.0", "end")
+        self._cau_highlight_cu = -1
+        try:
+            self.o_chu.tag_remove("dang_doc", "1.0", "end")
+            self.o_dich.tag_remove("dang_doc", "1.0", "end")
+        except Exception:
+            pass
 
     def _highlight_cau(self, chu, idx):
         self._xoa_highlight()
@@ -661,11 +676,14 @@ class App(tk.Tk):
         # 1. Bảng trái: tìm câu trong self.o_chu
         dau = chu[:min(35, len(chu))].strip()
         if dau:
-            pos = self.o_chu.search(dau, "1.0", tk.END)
-            if pos:
-                end_pos = f"{pos}+{len(chu)}c"
-                self.o_chu.tag_add("dang_doc", pos, end_pos)
-                self.o_chu.see(pos)
+            try:
+                pos = self.o_chu.search(dau, "1.0", tk.END)
+                if pos:
+                    end_pos = f"{pos}+{len(chu)}c"
+                    self.o_chu.tag_add("dang_doc", pos, end_pos)
+                    self.o_chu.see(pos)
+            except Exception:
+                pass
 
         # 2. Bảng phải: tìm câu dịch tương ứng
         dich_toan_bo = self.o_dich.get("1.0", "end").strip()
@@ -675,11 +693,14 @@ class App(tk.Tk):
                 cau_d = cac_cau_dich[idx]
                 dau_d = cau_d[:min(35, len(cau_d))].strip()
                 if dau_d:
-                    pos_d = self.o_dich.search(dau_d, "1.0", tk.END)
-                    if pos_d:
-                        end_pos_d = f"{pos_d}+{len(cau_d)}c"
-                        self.o_dich.tag_add("dang_doc", pos_d, end_pos_d)
-                        self.o_dich.see(pos_d)
+                    try:
+                        pos_d = self.o_dich.search(dau_d, "1.0", tk.END)
+                        if pos_d:
+                            end_pos_d = f"{pos_d}+{len(cau_d)}c"
+                            self.o_dich.tag_add("dang_doc", pos_d, end_pos_d)
+                            self.o_dich.see(pos_d)
+                    except Exception:
+                        pass
 
     def _theo_doi_phat(self):
         if not getattr(self, "_dang_theo_doi_phat", False):
@@ -709,7 +730,8 @@ class App(tk.Tk):
             else:
                 self._xoa_highlight()
 
-        self.after(50, self._theo_doi_phat)
+        if getattr(self, "_dang_theo_doi_phat", False):
+            self.after(100, self._theo_doi_phat)
 
     def _bat_dau_phat(self, duong_dan, cau_list=None):
         if cau_list:

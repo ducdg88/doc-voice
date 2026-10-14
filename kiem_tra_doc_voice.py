@@ -38,6 +38,14 @@ class KiemTraDocVoice(unittest.TestCase):
         self.assertEqual(cau_list[0], (0.0, 0.4, "Hello world."))
         self.assertEqual(cau_list[1], (0.5, 0.9, "Welcome back."))
 
+    def test_tinh_do_dai_doan(self):
+        fake_cau = [(0.0, 1.2, "Câu 1."), (1.5, 2.0, "Câu 2.")]
+        dai = doc_voice.tinh_do_dai_doan(b"123", fake_cau)
+        self.assertAlmostEqual(dai, 3.5)
+        # Khi không có câu, tính theo kích thước mp3
+        dai_rong = doc_voice.tinh_do_dai_doan(b"\x00" * 12000, [])
+        self.assertAlmostEqual(dai_rong, 2.0)
+
     def test_dich_tieng_viet(self):
         cau_goc = "Hello world"
         dich = doc_voice.dich_tieng_viet(cau_goc)
