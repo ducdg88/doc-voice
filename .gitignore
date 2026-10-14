@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+da_chuyen/
+__pycache__/
+giong.json
+cai_dat.json
+tu_dien.txt
+*.mp3
+*.srt
