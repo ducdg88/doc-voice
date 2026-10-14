@@ -128,6 +128,8 @@ def doc_docx(duong_dan):
     with zipfile.ZipFile(duong_dan) as z:
         xml = z.read("word/document.xml").decode("utf-8")
     xml = re.sub(r"<mc:Fallback>.*?</mc:Fallback>", "", xml, flags=re.S)
+    xml = re.sub(r"<w:txbxContent>(.*?)</w:txbxContent>", lambda m: "<w:t> " + " ".join(
+        re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", m.group(1), flags=re.S)) + " </w:t>", xml, flags=re.S)
     dong = []
     for p in re.findall(r"<w:p(?:\s[^>]*)?/>|<w:p(?:\s[^>]*)?>.*?</w:p>", xml, flags=re.S):
         p = p.replace("<w:tab/>", "<w:t> </w:t>").replace("<w:br/>", "<w:t>\n</w:t>")
@@ -164,18 +166,38 @@ def tra_chu_goc(chu, ds):
     return chu
 
 
+def tu_dien_cho_srt(goc, ds):
+    """Bỏ những mục mà cách đọc đã có sẵn trong văn bản gốc, để không đổi nhầm chữ người dùng viết."""
+    return [(tu, doc) for tu, doc in ds
+            if doc and not re.search(rf"(?<!\w){re.escape(doc)}(?!\w)", goc)]
+
+
+def chuan_cau(c):
+    return re.sub(r"\s+", " ", c).strip()
+
+
+def ban_do_cau(goc, ds):
+    """{câu đã thay theo từ điển: câu gốc}, để phụ đề hiện đúng chữ người dùng viết."""
+    if not ds:
+        return {}
+    return {chuan_cau(ap_tu_dien(c, ds)): chuan_cau(c)
+            for c in re.split(r"(?<=[.!?。！？…])\s+|\n+", goc) if c.strip()}
+
+
 def gio_srt(giay):
     ms = int(round(giay * 1000))
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
-def tao_srt(ket_qua, tu_dien=()):
-    """ket_qua: [(mp3, [(bắt_đầu_giây, dài_giây, câu)])] theo thứ tự đoạn."""
+def tao_srt(ket_qua, tu_dien=({}, ())):
+    """ket_qua: [(mp3, [(bắt_đầu_giây, dài_giây, câu)])] theo thứ tự đoạn.
+    tu_dien: (bản đồ câu, từ điển dự phòng) để trả phụ đề về chữ gốc."""
+    ban_do, du_phong = tu_dien
     dong, lech, so = [], 0.0, 0
     for mp3, cau in ket_qua:
         for bd, dai, chu in cau:
             so += 1
-            chu = tra_chu_goc(chu, tu_dien)
+            chu = ban_do.get(chuan_cau(chu)) or tra_chu_goc(chu, du_phong)
             dong.append(f"{so}\n{gio_srt(lech + bd)} --> {gio_srt(lech + bd + dai)}\n{chu}\n")
         lech += len(mp3) / BYTE_MOI_GIAY
     return "\n".join(dong)
@@ -254,6 +276,8 @@ def thay_exe(asset, mo_lai=True):
         os.replace(moi, exe)
     except BaseException:
         os.replace(cu, exe)  # trả exe cũ về chỗ
+        if os.path.exists(moi):
+            os.remove(moi)
         raise
     env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
     if not mo_lai:
@@ -525,8 +549,9 @@ class App(tk.Tk):
         self.nut_thu.state(["disabled"])
         giong, toc, cao = self._tham_so()
         self._luu_cai_dat()
-        self._tu_dien_luot = doc_tu_dien()
-        van_ban = ap_tu_dien(van_ban, self._tu_dien_luot)
+        td = doc_tu_dien()
+        self._tu_dien_luot = (ban_do_cau(van_ban, td), tu_dien_cho_srt(van_ban, td))
+        van_ban = ap_tu_dien(van_ban, td)
         threading.Thread(target=self._lam, args=(van_ban, duong_ra, giong, toc, cao, nghe_thu),
                          daemon=True).start()
 
