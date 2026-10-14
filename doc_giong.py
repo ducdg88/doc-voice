@@ -7,6 +7,7 @@ Bản exe tự kiểm bản mới trên GitHub Releases và tự thay.
 import asyncio
 import ctypes
 import html
+import hashlib
 import json
 import os
 import re
@@ -21,9 +22,16 @@ from tkinter import filedialog, messagebox, ttk
 
 import edge_tts
 
+def thu_muc_documents():
+    buf = ctypes.create_unicode_buffer(260)
+    if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
+        return buf.value
+    return os.path.join(os.path.expanduser("~"), "Documents")
+
+
 if getattr(sys, "frozen", False):  # bản exe gửi người khác: dữ liệu theo từng người dùng
     GOC = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "DocGiong")
-    THU_MUC_RA = os.path.join(os.path.expanduser("~"), "Documents", "Doc Giong")
+    THU_MUC_RA = os.path.join(thu_muc_documents(), "Doc Giong")
 else:
     GOC = os.path.dirname(os.path.abspath(__file__))
     THU_MUC_RA = os.path.join(GOC, "da_chuyen")
@@ -36,6 +44,7 @@ SONG_SONG = 3  # số đoạn gửi máy chủ cùng lúc
 PHIEN_BAN = "1.0.0"
 KHO_GITHUB = "ducdg88/doc-giong"
 TEN_EXE = "DocGiong.exe"
+LINK_TAI_HOP_LE = f"https://github.com/{KHO_GITHUB}/releases/download/"
 FILE_TU_DIEN = os.path.join(GOC, "tu_dien.txt")
 BYTE_MOI_GIAY = 6000  # edge-tts trả mp3 48 kbps: 6000 byte = 1 giây
 
@@ -100,10 +109,12 @@ def chia_doan(van_ban, toi_da=DO_DAI_DOAN):
         while len(c) > toi_da:  # câu quá dài: cắt ở dấu phẩy hoặc khoảng trắng
             cat = max(c.rfind(",", 0, toi_da), c.rfind(" ", 0, toi_da))
             cat = cat if cat > 0 else toi_da
-            doan.append(c[: cat + 1].strip())
+            if c[: cat + 1].strip():
+                doan.append(c[: cat + 1].strip())
             c = c[cat + 1:].strip()
         if len(hien_tai) + len(c) + 1 > toi_da:
-            doan.append(hien_tai)
+            if hien_tai:
+                doan.append(hien_tai)
             hien_tai = c
         else:
             hien_tai = f"{hien_tai} {c}".strip()
@@ -116,8 +127,9 @@ def doc_docx(duong_dan):
     """Lấy chữ từ file Word .docx, mỗi đoạn một dòng (không cần thư viện ngoài)."""
     with zipfile.ZipFile(duong_dan) as z:
         xml = z.read("word/document.xml").decode("utf-8")
+    xml = re.sub(r"<mc:Fallback>.*?</mc:Fallback>", "", xml, flags=re.S)
     dong = []
-    for p in re.findall(r"<w:p[ >].*?</w:p>", xml, flags=re.S):
+    for p in re.findall(r"<w:p(?:\s[^>]*)?/>|<w:p(?:\s[^>]*)?>.*?</w:p>", xml, flags=re.S):
         p = p.replace("<w:tab/>", "<w:t> </w:t>").replace("<w:br/>", "<w:t>\n</w:t>")
         dong.append(html.unescape("".join(re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", p, flags=re.S))))
     return "\n".join(dong)
@@ -144,17 +156,26 @@ def ap_tu_dien(van_ban, ds):
     return van_ban
 
 
+def tra_chu_goc(chu, ds):
+    """Đổi cách đọc trong phụ đề về lại chữ gốc của từ điển."""
+    for tu, doc in sorted(ds, key=lambda x: -len(x[1])):
+        if doc:
+            chu = re.sub(rf"(?<!\w){re.escape(doc)}(?!\w)", lambda m: tu, chu)
+    return chu
+
+
 def gio_srt(giay):
     ms = int(round(giay * 1000))
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
 
 
-def tao_srt(ket_qua):
+def tao_srt(ket_qua, tu_dien=()):
     """ket_qua: [(mp3, [(bắt_đầu_giây, dài_giây, câu)])] theo thứ tự đoạn."""
     dong, lech, so = [], 0.0, 0
     for mp3, cau in ket_qua:
         for bd, dai, chu in cau:
             so += 1
+            chu = tra_chu_goc(chu, tu_dien)
             dong.append(f"{so}\n{gio_srt(lech + bd)} --> {gio_srt(lech + bd + dai)}\n{chu}\n")
         lech += len(mp3) / BYTE_MOI_GIAY
     return "\n".join(dong)
@@ -164,9 +185,17 @@ def so_phien_ban(v):
     return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
 
 
+def che_do_thu():
+    """Máy chủ giả chỉ dùng khi chạy bằng Python, hoặc exe có file DOCGIONG_THU đặt cạnh (máy dev)."""
+    if not getattr(sys, "frozen", False):
+        return True
+    return os.path.exists(os.path.join(os.path.dirname(sys.executable), "DOCGIONG_THU"))
+
+
 def kiem_ban_moi():
-    """Trả (phiên bản, link tải exe) nếu GitHub có bản mới hơn, không thì None."""
-    api = os.environ.get("DOCGIONG_API") or f"https://api.github.com/repos/{KHO_GITHUB}/releases/latest"
+    """Trả (phiên bản, asset exe) nếu GitHub có bản mới hơn, không thì None."""
+    api = (che_do_thu() and os.environ.get("DOCGIONG_API")) or \
+        f"https://api.github.com/repos/{KHO_GITHUB}/releases/latest"
     req = urllib.request.Request(api,
                                  headers={"User-Agent": "DocGiong", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=10) as r:
@@ -176,31 +205,56 @@ def kiem_ban_moi():
         return None
     for a in rel.get("assets", []):
         if a["name"].lower() == TEN_EXE.lower():
-            return tag.lstrip("v"), a["browser_download_url"]
+            if not (a["browser_download_url"].startswith(LINK_TAI_HOP_LE) or che_do_thu()):
+                return None
+            return tag.lstrip("v"), a
     return None
 
 
-def thay_exe(link, mo_lai=True):
-    """Tải exe mới, đổi tên exe đang chạy (Windows cho phép), đặt exe mới vào chỗ cũ, mở lại."""
+def thay_exe(asset, mo_lai=True):
+    """Tải exe mới, kiểm đủ byte và sha256, đổi tên exe đang chạy (Windows cho phép),
+    đặt exe mới vào chỗ cũ, mở lại. Lỗi ở bất kỳ bước nào thì exe cũ vẫn nguyên."""
     exe = sys.executable
     thu_muc = os.path.dirname(exe)
     moi = os.path.join(thu_muc, TEN_EXE + ".new")
     cu = os.path.join(thu_muc, "DocGiong.old.exe")
-    req = urllib.request.Request(link, headers={"User-Agent": "DocGiong"})
-    with urllib.request.urlopen(req, timeout=60) as r, open(moi, "wb") as f:
-        while True:
-            b = r.read(1 << 20)
-            if not b:
-                break
-            f.write(b)
-    with open(moi, "rb") as f:
-        if os.path.getsize(moi) < 1_000_000 or f.read(2) != b"MZ":
+    can_size = asset.get("size")
+    can_sha = (asset.get("digest") or "").removeprefix("sha256:").lower()
+    try:
+        h, n = hashlib.sha256(), 0
+        req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "DocGiong"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(moi, "wb") as f:
+            dai = r.headers.get("Content-Length")
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                f.write(b)
+                h.update(b)
+                n += len(b)
+        if dai is not None and n != int(dai):
+            raise RuntimeError(f"Tải chưa đủ ({n}/{dai} byte), mạng bị ngắt")
+        if can_size and n != can_size:
+            raise RuntimeError(f"Kích thước không khớp ({n}/{can_size} byte)")
+        if can_sha and h.hexdigest() != can_sha:
+            raise RuntimeError("Mã kiểm sha256 không khớp, file tải về đã bị sửa")
+        if not can_size and not can_sha and not che_do_thu():
+            raise RuntimeError("Bản phát hành thiếu thông tin kiểm tra")
+        with open(moi, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise RuntimeError("File tải về không phải exe")
+    except BaseException:
+        if os.path.exists(moi):
             os.remove(moi)
-            raise RuntimeError("File tải về không phải exe hợp lệ")
+        raise
     if os.path.exists(cu):
         os.remove(cu)
     os.replace(exe, cu)
-    os.replace(moi, exe)
+    try:
+        os.replace(moi, exe)
+    except BaseException:
+        os.replace(cu, exe)  # trả exe cũ về chỗ
+        raise
     env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
     if not mo_lai:
         return
@@ -237,7 +291,8 @@ async def tao_doan(text, giong, toc_do, cao_do):
             loi = RuntimeError("Máy chủ không trả âm thanh")
         except Exception as e:  # mạng chập chờn, 403 tạm thời...
             loi = e
-        await asyncio.sleep(1.5 * (lan + 1))
+        if lan < SO_LAN_THU - 1:
+            await asyncio.sleep(1.5 * (lan + 1))
     raise loi
 
 
@@ -420,7 +475,9 @@ class App(tk.Tk):
             self.o_chu.insert("1.0", noi_dung)
             self._dem_chu()
             return
-        for ma in ("utf-8-sig", "utf-16", "cp1258"):
+        with open(p, "rb") as f:
+            dau = f.read(2)
+        for ma in (("utf-16",) if dau in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp1258")):
             try:
                 with open(p, encoding=ma) as f:
                     noi_dung = f.read()
@@ -442,7 +499,7 @@ class App(tk.Tk):
         t = self.o_chu.get("1.0", "end").strip()
         if not t or not self._san_sang():
             return
-        doan = chia_doan(t, 300)[0]
+        doan = (chia_doan(t, 300) or [""])[0]
         self._chay(doan, os.path.join(THU_MUC_RA, "_nghe_thu.mp3"), nghe_thu=True)
 
     def _chuyen(self):
@@ -468,13 +525,19 @@ class App(tk.Tk):
         self.nut_thu.state(["disabled"])
         giong, toc, cao = self._tham_so()
         self._luu_cai_dat()
-        van_ban = ap_tu_dien(van_ban, doc_tu_dien())
+        self._tu_dien_luot = doc_tu_dien()
+        van_ban = ap_tu_dien(van_ban, self._tu_dien_luot)
         threading.Thread(target=self._lam, args=(van_ban, duong_ra, giong, toc, cao, nghe_thu),
                          daemon=True).start()
 
     def _lam(self, van_ban, duong_ra, giong, toc, cao, nghe_thu):
-        doan = chia_doan(van_ban)
+        doan = [d for d in chia_doan(van_ban) if re.search(r"\w", d)]
         xong = [0]
+        if not doan:
+            self.after(0, self._bao, "Không có chữ nào để đọc", 0)
+            self.after(0, lambda: messagebox.showwarning("Đọc Giọng", "Văn bản không có chữ nào để đọc."))
+            self.after(0, self._xong)
+            return
 
         async def tat_ca():
             khoa = asyncio.Semaphore(SONG_SONG)
@@ -497,7 +560,7 @@ class App(tk.Tk):
             os.replace(tam, duong_ra)
             if not nghe_thu:
                 with open(os.path.splitext(duong_ra)[0] + ".srt", "w", encoding="utf-8") as f:
-                    f.write(tao_srt(ket_qua))
+                    f.write(tao_srt(ket_qua, self._tu_dien_luot))
             self.file_cuoi = duong_ra
             self.after(0, self._bao, "Đang phát thử" if nghe_thu else f"Xong: {duong_ra}", 100)
             self.after(0, phat, duong_ra)
@@ -543,7 +606,7 @@ class App(tk.Tk):
             return
         self.after(0, self._hoi_cap_nhat, *moi)
 
-    def _hoi_cap_nhat(self, ban, link):
+    def _hoi_cap_nhat(self, ban, asset):
         if not getattr(sys, "frozen", False):
             messagebox.showinfo("Đọc Giọng", f"Có bản v{ban}. Bản chạy bằng Python thì cập nhật bằng git pull.")
             return
@@ -552,14 +615,20 @@ class App(tk.Tk):
         if not messagebox.askyesno("Đọc Giọng", f"Có bản mới v{ban} (đang dùng v{PHIEN_BAN}).\nCập nhật ngay?"):
             return
         self.trang_thai.set(f"Đang tải bản v{ban}...")
+        self.dang_chay = True
+        self.nut_chuyen.state(["disabled"])
+        self.nut_thu.state(["disabled"])
 
         def lam():
             try:
-                thay_exe(link)
+                thay_exe(asset)
                 self.after(0, self._thoat)
             except Exception as e:
+                self.after(0, self._xong)
+                self.after(0, self._bao, f"Cập nhật lỗi: {e}", 0)
                 self.after(0, lambda e=e: messagebox.showerror(
-                    "Đọc Giọng", f"Không tự cập nhật được:\n{e}\n\nTải tay tại github.com/{KHO_GITHUB}/releases"))
+                    "Đọc Giọng", f"Không tự cập nhật được, app cũ vẫn dùng bình thường:\n{e}"
+                    f"\n\nTải tay tại github.com/{KHO_GITHUB}/releases"))
         threading.Thread(target=lam, daemon=True).start()
 
     def _bao(self, chu, phan_tram):
@@ -602,8 +671,9 @@ def tu_thu(nhat_ky):
             moi = kiem_ban_moi()
             f.write(f"ban moi: {moi}\n")
             if moi:
-                thay_exe(moi[1], mo_lai=False)
-                f.write("da thay exe\n")
+                mo_lai = bool(os.environ.get("DOCGIONG_KIEM_MO"))
+                thay_exe(moi[1], mo_lai=mo_lai)
+                f.write(f"da thay exe, mo lai={mo_lai}\n")
         except Exception as e:
             f.write(f"cap nhat LOI {e}\n")
 
@@ -612,5 +682,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--tu-thu":
         don_exe_cu()
         tu_thu(sys.argv[2])
+    elif os.environ.get("DOCGIONG_KIEM_MO") and che_do_thu():
+        # kiểm đường mở lại sau cập nhật: dựng app ẩn, ghi nhật ký rồi thoát
+        app = App()
+        app.withdraw()
+        with open(os.environ["DOCGIONG_KIEM_MO"], "a", encoding="utf-8") as f:
+            f.write(f"mo lai ok: v{PHIEN_BAN} giao dien dung xong, exe={sys.executable}\n")
+        app.destroy()
     else:
         App().mainloop()

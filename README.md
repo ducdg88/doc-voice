@@ -6,16 +6,16 @@ App Windows chuyển văn bản thành giọng nói bằng giọng Microsoft Edg
 
 - Chỉnh cao độ và tốc độ đọc, nghe thử trước khi xuất.
 - Đọc kịch bản dài (hàng chục nghìn ký tự) cho video dài: tự chia đoạn, ghép thành một file mp3.
-- Xuất kèm phụ đề `.srt` khớp thời gian, kéo thẳng vào CapCut hay Premiere.
+- Xuất kèm phụ đề `.srt` khớp thời gian (giữ chữ gốc, không theo từ điển), kéo thẳng vào CapCut hay Premiere.
 - Mở file `.txt` và Word `.docx`.
 - Từ điển cách đọc: `AI = ây ai`.
-- Tự kiểm và cài bản mới khi mở app.
+- Tự kiểm bản mới khi mở app, hỏi trước rồi mới cài; tải lỗi thì giữ nguyên bản cũ.
 
 ## Tải và dùng
 
 1. Vào [Releases](https://github.com/ducdg88/doc-giong/releases/latest), tải `DocGiong.exe`.
-2. Đặt vào một thư mục riêng (ví dụ `Documents\DocGiong`), bấm đúp để chạy. Không cần cài Python.
-3. File mp3 và srt lưu ở `Documents\Doc Giong`.
+2. Đặt vào một thư mục riêng có quyền ghi (ví dụ `Documents\DocGiong`, không đặt trong Program Files), bấm đúp để chạy. Không cần cài Python.
+3. File mp3 và srt lưu ở `Documents\Doc Giong`. Cài đặt, từ điển và văn bản đang gõ lưu ở `%APPDATA%\DocGiong`.
 
 Windows SmartScreen có thể cảnh báo vì exe chưa ký số: bấm **More info**, rồi **Run anyway**.
 
@@ -34,16 +34,16 @@ A Windows app that turns text into speech with Microsoft Edge Neural voices: 300
 
 - Adjust pitch and speed, preview before exporting.
 - Long scripts (tens of thousands of characters) for long-form video: auto-chunked and merged into one mp3.
-- Exports a timed `.srt` subtitle file alongside the mp3.
+- Exports a timed `.srt` subtitle file alongside the mp3 (original wording, not dictionary spellings).
 - Opens `.txt` and Word `.docx` files.
 - Pronunciation dictionary: `AI = ây ai`.
-- Checks for and installs new versions on launch.
+- Checks for new versions on launch and asks before installing; a failed download keeps the old version.
 
 ## Download
 
 1. Get `DocGiong.exe` from [Releases](https://github.com/ducdg88/doc-giong/releases/latest).
-2. Put it in its own folder and double-click. No Python needed.
-3. Output goes to `Documents\Doc Giong`.
+2. Put it in its own writable folder (not Program Files) and double-click. No Python needed.
+3. Output goes to `Documents\Doc Giong`; settings, dictionary and draft text live in `%APPDATA%\DocGiong`.
 
 SmartScreen may warn because the exe is unsigned: click **More info**, then **Run anyway**.
 
