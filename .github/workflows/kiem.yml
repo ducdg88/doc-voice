@@ -9,5 +9,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyflakes
-      - run: python -m compileall -q doc_giong.py
-      - run: python -m pyflakes doc_giong.py
+      - run: python -m compileall -q doc_voice.py
+      - run: python -m pyflakes doc_voice.py
+      - run: python kiem_tra_doc_voice.py

@@ -1,8 +1,10 @@
-"""Đọc Giọng: app đọc văn bản bằng giọng Edge (Microsoft Neural), dùng riêng trên máy.
+"""Đọc Voice: app đọc văn bản bằng giọng Edge (Microsoft Neural), chạy trên máy.
 
-Giống bản J2TEAM TTS miễn phí trước đây: chọn ngôn ngữ, giọng, cao độ, tốc độ,
-đọc thử, xuất mp3. Văn bản dài được chia đoạn theo câu rồi ghép lại, kèm phụ đề .srt.
-Bản exe tự kiểm bản mới trên GitHub Releases và tự thay.
+Giao diện 2 bảng song song: bảng bên trái chứa văn bản đọc (tiếng Anh hoặc gốc),
+bảng bên phải chứa bản dịch tiếng Việt để theo dõi nội dung.
+Highlight nền vàng nhảy theo từng câu đọc theo thời gian thực (karaoke highlight).
+Văn bản dài được chia đoạn theo câu rồi ghép lại, kèm phụ đề .srt khớp thời lượng.
+Bản exe tự kiểm bản mới trên GitHub Releases và tự cập nhật an toàn.
 """
 import asyncio
 import ctypes
@@ -11,7 +13,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import urllib.parse
 import urllib.request
 import zipfile
 import sys
@@ -22,6 +26,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import edge_tts
 
+
 def thu_muc_documents():
     buf = ctypes.create_unicode_buffer(260)
     if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
@@ -30,8 +35,16 @@ def thu_muc_documents():
 
 
 if getattr(sys, "frozen", False):  # bản exe gửi người khác: dữ liệu theo từng người dùng
-    GOC = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "DocGiong")
-    THU_MUC_RA = os.path.join(thu_muc_documents(), "Doc Giong")
+    appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+    GOC = os.path.join(appdata, "DocVoice")
+    # Di chuyển dữ liệu cũ từ DocGiong nếu có
+    goc_cu = os.path.join(appdata, "DocGiong")
+    if not os.path.exists(GOC) and os.path.exists(goc_cu):
+        try:
+            shutil.copytree(goc_cu, GOC)
+        except Exception:
+            pass
+    THU_MUC_RA = os.path.join(thu_muc_documents(), "Doc Voice")
 else:
     GOC = os.path.dirname(os.path.abspath(__file__))
     THU_MUC_RA = os.path.join(GOC, "da_chuyen")
@@ -41,9 +54,9 @@ FILE_CAI_DAT = os.path.join(GOC, "cai_dat.json")
 DO_DAI_DOAN = 2500  # ký tự mỗi lượt gửi máy chủ
 SO_LAN_THU = 4
 SONG_SONG = 3  # số đoạn gửi máy chủ cùng lúc
-PHIEN_BAN = "1.0.0"
-KHO_GITHUB = "ducdg88/doc-giong"
-TEN_EXE = "DocGiong.exe"
+PHIEN_BAN = "1.1.0"
+KHO_GITHUB = "ducdg88/doc-voice"
+TEN_EXE = "DocVoice.exe"
 LINK_TAI_HOP_LE = f"https://github.com/{KHO_GITHUB}/releases/download/"
 FILE_TU_DIEN = os.path.join(GOC, "tu_dien.txt")
 BYTE_MOI_GIAY = 6000  # edge-tts trả mp3 48 kbps: 6000 byte = 1 giây
@@ -66,14 +79,14 @@ def mci(lenh):
 
 
 def phat(duong_dan):
-    mci("close docgiong")
-    mci(f'open "{duong_dan}" type mpegvideo alias docgiong')
-    mci("play docgiong")
+    mci("close docvoice")
+    mci(f'open "{duong_dan}" type mpegvideo alias docvoice')
+    mci("play docvoice")
 
 
 def dung_phat():
-    mci("stop docgiong")
-    mci("close docgiong")
+    mci("stop docvoice")
+    mci("close docvoice")
 
 
 # ---------- dữ liệu ----------
@@ -203,23 +216,59 @@ def tao_srt(ket_qua, tu_dien=({}, ())):
     return "\n".join(dong)
 
 
+def lay_danh_sach_cau(ket_qua, tu_dien=({}, ())):
+    """Trích xuất danh sách [(bat_dau, ket_thuc, chu_that)] theo timeline audio để karaoke highlight."""
+    ban_do, du_phong = tu_dien
+    cau_list, lech = [], 0.0
+    for mp3, cau in ket_qua:
+        for bd, dai, chu in cau:
+            chu_that = ban_do.get(chuan_cau(chu)) or tra_chu_goc(chu, du_phong)
+            cau_list.append((lech + bd, lech + bd + dai, chu_that.strip()))
+        lech += len(mp3) / BYTE_MOI_GIAY
+    return cau_list
+
+
+def dich_tieng_viet(van_ban):
+    """Dịch văn bản sang tiếng Việt bằng endpoint miễn phí không cần key."""
+    if not van_ban.strip():
+        return ""
+    cac_doan = [d for d in chia_doan(van_ban, toi_da=1800) if d.strip()]
+    ket_qua = []
+    for doan in cac_doan:
+        params = urllib.parse.urlencode({
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "vi",
+            "dt": "t",
+            "q": doan
+        })
+        url = f"https://translate.googleapis.com/translate_a/single?{params}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            dich_doan = "".join(item[0] for item in data[0] if item and item[0])
+            ket_qua.append(dich_doan)
+    return "\n\n".join(ket_qua)
+
+
 def so_phien_ban(v):
     return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
 
 
 def che_do_thu():
-    """Máy chủ giả chỉ dùng khi chạy bằng Python, hoặc exe có file DOCGIONG_THU đặt cạnh (máy dev)."""
+    """Máy chủ giả chỉ dùng khi chạy bằng Python, hoặc exe có file DOCVOICE_THU đặt cạnh (máy dev)."""
     if not getattr(sys, "frozen", False):
         return True
-    return os.path.exists(os.path.join(os.path.dirname(sys.executable), "DOCGIONG_THU"))
+    d = os.path.dirname(sys.executable)
+    return os.path.exists(os.path.join(d, "DOCVOICE_THU")) or os.path.exists(os.path.join(d, "DOCGIONG_THU"))
 
 
 def kiem_ban_moi():
     """Trả (phiên bản, asset exe) nếu GitHub có bản mới hơn, không thì None."""
-    api = (che_do_thu() and os.environ.get("DOCGIONG_API")) or \
+    api = (che_do_thu() and (os.environ.get("DOCVOICE_API") or os.environ.get("DOCGIONG_API"))) or \
         f"https://api.github.com/repos/{KHO_GITHUB}/releases/latest"
     req = urllib.request.Request(api,
-                                 headers={"User-Agent": "DocGiong", "Accept": "application/vnd.github+json"})
+                                 headers={"User-Agent": "DocVoice", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=10) as r:
         rel = json.load(r)
     tag = rel.get("tag_name", "")
@@ -239,12 +288,12 @@ def thay_exe(asset, mo_lai=True):
     exe = sys.executable
     thu_muc = os.path.dirname(exe)
     moi = os.path.join(thu_muc, TEN_EXE + ".new")
-    cu = os.path.join(thu_muc, "DocGiong.old.exe")
+    cu = os.path.join(thu_muc, "DocVoice.old.exe")
     can_size = asset.get("size")
     can_sha = (asset.get("digest") or "").removeprefix("sha256:").lower()
     try:
         h, n = hashlib.sha256(), 0
-        req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "DocGiong"})
+        req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "DocVoice"})
         with urllib.request.urlopen(req, timeout=60) as r, open(moi, "wb") as f:
             dai = r.headers.get("Content-Length")
             while True:
@@ -288,14 +337,16 @@ def thay_exe(asset, mo_lai=True):
 
 def don_exe_cu():
     if getattr(sys, "frozen", False):
-        cu = os.path.join(os.path.dirname(sys.executable), "DocGiong.old.exe")
-        for _ in range(20):
-            try:
-                if os.path.exists(cu):
-                    os.remove(cu)
-                return
-            except OSError:
-                time.sleep(0.5)
+        thu_muc = os.path.dirname(sys.executable)
+        for ten in ("DocVoice.old.exe", "DocGiong.old.exe"):
+            cu = os.path.join(thu_muc, ten)
+            if os.path.exists(cu):
+                for _ in range(20):
+                    try:
+                        os.remove(cu)
+                        break
+                    except OSError:
+                        time.sleep(0.5)
 
 
 async def tao_doan(text, giong, toc_do, cao_do):
@@ -303,20 +354,20 @@ async def tao_doan(text, giong, toc_do, cao_do):
     loi = None
     for lan in range(SO_LAN_THU):
         try:
-            buf, cau = bytearray(), []
-            com = edge_tts.Communicate(text, giong, rate=toc_do, pitch=cao_do)
-            async for goi in com.stream():
-                if goi["type"] == "audio":
-                    buf.extend(goi["data"])
-                elif goi["type"] in ("SentenceBoundary", "WordBoundary"):
-                    cau.append((goi["offset"] / 1e7, goi["duration"] / 1e7, goi["text"]))
-            if buf:
-                return bytes(buf), cau
-            loi = RuntimeError("Máy chủ không trả âm thanh")
-        except Exception as e:  # mạng chập chờn, 403 tạm thời...
+            comm = edge_tts.Communicate(text, giong, rate=toc_do, pitch=cao_do)
+            mp3, cau = bytearray(), []
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    mp3.extend(chunk["data"])
+                elif chunk["type"] == "SentenceBoundary":
+                    bd = chunk["offset"] / 10_000_000
+                    dai = chunk["duration"] / 10_000_000
+                    cau.append((bd, dai, chunk["text"]))
+            return bytes(mp3), cau
+        except Exception as e:
             loi = e
-        if lan < SO_LAN_THU - 1:
-            await asyncio.sleep(1.5 * (lan + 1))
+            if lan < SO_LAN_THU - 1:
+                await asyncio.sleep(1 + lan)
     raise loi
 
 
@@ -324,14 +375,17 @@ async def tao_doan(text, giong, toc_do, cao_do):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"Đọc Giọng · Text to Speech · v{PHIEN_BAN}")
-        self.geometry("860x680")
-        self.minsize(700, 560)
+        self.title(f"Đọc Voice · Text to Speech · v{PHIEN_BAN}")
+        self.geometry("980x720")
+        self.minsize(800, 600)
         self.configure(bg="#f6f8fa")
         self.giong = doc_json(FILE_GIONG, [])
         self.cd = doc_json(FILE_CAI_DAT, {})
         self.dang_chay = False
         self.file_cuoi = None
+        self._danh_sach_cau = []
+        self._dang_theo_doi_phat = False
+        self._cau_highlight_cu = -1
         os.makedirs(THU_MUC_RA, exist_ok=True)
         self._dung_giao_dien()
         if self.giong:
@@ -349,40 +403,40 @@ class App(tk.Tk):
         s = ttk.Style(self)
         s.theme_use("clam")
         s.configure(".", font=("Segoe UI", 10), background="#f6f8fa")
-        s.configure("Tieu.TLabel", font=("Segoe UI Semibold", 17))
+        s.configure("Tieu.TLabel", font=("Segoe UI Semibold", 16))
         s.configure("Xanh.TButton", foreground="white", background="#16a34a", padding=(14, 7))
         s.map("Xanh.TButton", background=[("active", "#15803d"), ("disabled", "#9ca3af")])
         s.configure("TButton", padding=(10, 6))
         s.configure("green.Horizontal.TProgressbar", background="#16a34a")
 
-        khung = ttk.Frame(self, padding=18)
+        khung = ttk.Frame(self, padding=16)
         khung.pack(fill="both", expand=True)
 
-        ttk.Label(khung, text="Chuyển văn bản thành giọng nói", style="Tieu.TLabel").pack(anchor="w")
-        ttk.Label(khung, text="Giọng Microsoft Edge Neural, chạy trên máy, dùng riêng.",
-                  foreground="#6b7280").pack(anchor="w", pady=(0, 12))
+        ttk.Label(khung, text="Chuyển văn bản thành giọng nói (Đọc Voice)", style="Tieu.TLabel").pack(anchor="w")
+        ttk.Label(khung, text="Giọng Microsoft Edge Neural, 2 bảng song song tiếng Anh và bản dịch, highlight theo tiến trình đọc.",
+                  foreground="#6b7280").pack(anchor="w", pady=(0, 10))
 
         hang1 = ttk.Frame(khung)
-        hang1.pack(fill="x", pady=(0, 10))
+        hang1.pack(fill="x", pady=(0, 8))
         ttk.Button(hang1, text="Mở file văn bản", command=self._mo_file).pack(side="left")
         ttk.Button(hang1, text="Từ điển", command=self._tu_dien).pack(side="left", padx=(6, 0))
         ttk.Button(hang1, text="Cập nhật", command=lambda: threading.Thread(
             target=self._kiem_cap_nhat, args=(True,), daemon=True).start()).pack(side="right")
         ttk.Label(hang1, text="  Ngôn ngữ").pack(side="left")
-        self.ngon_ngu = ttk.Combobox(hang1, state="readonly", width=24)
+        self.ngon_ngu = ttk.Combobox(hang1, state="readonly", width=22)
         self.ngon_ngu.pack(side="left", padx=6)
         self.ngon_ngu.bind("<<ComboboxSelected>>", lambda e: self._nap_giong())
         ttk.Label(hang1, text="Giọng").pack(side="left")
-        self.chon_giong = ttk.Combobox(hang1, state="readonly", width=30)
+        self.chon_giong = ttk.Combobox(hang1, state="readonly", width=28)
         self.chon_giong.pack(side="left", padx=6)
 
         hang2 = ttk.Frame(khung)
-        hang2.pack(fill="x", pady=(0, 10))
+        hang2.pack(fill="x", pady=(0, 8))
         self.cao_do = tk.IntVar(value=self.cd.get("cao_do", 0))
         self.toc_do = tk.IntVar(value=self.cd.get("toc_do", 0))
-        self.nhan_cao = ttk.Label(hang2, width=34)
+        self.nhan_cao = ttk.Label(hang2, width=32)
         self.nhan_cao.grid(row=0, column=0, sticky="w")
-        self.nhan_toc = ttk.Label(hang2, width=34)
+        self.nhan_toc = ttk.Label(hang2, width=32)
         self.nhan_toc.grid(row=0, column=1, sticky="w", padx=(24, 0))
         ttk.Scale(hang2, from_=-50, to=50, variable=self.cao_do,
                   command=lambda v: self._cap_nhat_nhan()).grid(row=1, column=0, sticky="ew")
@@ -396,31 +450,71 @@ class App(tk.Tk):
         self.trang_thai = tk.StringVar(value="Sẵn sàng")
         ttk.Label(khung, textvariable=self.trang_thai, foreground="#374151").pack(side="bottom", anchor="w", pady=(4, 0))
         self.tien_do = ttk.Progressbar(khung, style="green.Horizontal.TProgressbar", maximum=100)
-        self.tien_do.pack(side="bottom", fill="x", pady=(10, 0))
+        self.tien_do.pack(side="bottom", fill="x", pady=(8, 0))
+
         hang3 = ttk.Frame(khung)
-        hang3.pack(side="bottom", fill="x", pady=(10, 0))
+        hang3.pack(side="bottom", fill="x", pady=(8, 0))
         self.nut_chuyen = ttk.Button(hang3, text="Chuyển đổi", style="Xanh.TButton", command=self._chuyen)
         self.nut_chuyen.pack(side="left")
         self.nut_thu = ttk.Button(hang3, text="Nghe thử", command=self._nghe_thu)
         self.nut_thu.pack(side="left", padx=6)
-        ttk.Button(hang3, text="Dừng phát", command=dung_phat).pack(side="left")
+        ttk.Button(hang3, text="Dừng phát", command=self._dung_phat_app).pack(side="left")
         ttk.Button(hang3, text="Phát lại", command=self._phat_lai).pack(side="left", padx=6)
         ttk.Button(hang3, text="Đã chuyển đổi", command=lambda: os.startfile(THU_MUC_RA)).pack(side="left")
-        ttk.Button(hang3, text="Xoá", command=lambda: self.o_chu.delete("1.0", "end")).pack(side="left", padx=6)
-        self.dem = ttk.Label(hang3, foreground="#dc2626")
-        self.dem.pack(side="right")
+        ttk.Button(hang3, text="Xoá bảng đọc", command=lambda: self.o_chu.delete("1.0", "end")).pack(side="left", padx=6)
+        ttk.Button(hang3, text="Xoá cả 2", command=self._xoa_ca_hai).pack(side="left")
 
-        khung_chu = ttk.Frame(khung)
-        khung_chu.pack(fill="both", expand=True)
-        self.o_chu = tk.Text(khung_chu, wrap="word", font=("Segoe UI", 11), relief="solid",
+        # Khung văn bản 2 bảng chia đôi
+        khung_paned = ttk.PanedWindow(khung, orient="horizontal")
+        khung_paned.pack(fill="both", expand=True)
+
+        # Bảng trái: Văn bản đọc
+        cot_trai = ttk.Frame(khung_paned)
+        khung_paned.add(cot_trai, weight=1)
+
+        tieu_trai = ttk.Frame(cot_trai)
+        tieu_trai.pack(fill="x", pady=(0, 4))
+        ttk.Label(tieu_trai, text="Văn bản đọc (chỉ đọc mục này)", font=("Segoe UI Semibold", 10),
+                  foreground="#1f2937").pack(side="left")
+        self.dem_trai = ttk.Label(tieu_trai, foreground="#dc2626", font=("Segoe UI", 9))
+        self.dem_trai.pack(side="right")
+
+        khung_text_trai = ttk.Frame(cot_trai)
+        khung_text_trai.pack(fill="both", expand=True)
+        self.o_chu = tk.Text(khung_text_trai, wrap="word", font=("Segoe UI", 11), relief="solid",
                              borderwidth=1, padx=10, pady=8, undo=True)
-        cuon = ttk.Scrollbar(khung_chu, command=self.o_chu.yview)
-        self.o_chu.configure(yscrollcommand=cuon.set)
+        cuon_trai = ttk.Scrollbar(khung_text_trai, command=self.o_chu.yview)
+        self.o_chu.configure(yscrollcommand=cuon_trai.set)
         self.o_chu.pack(side="left", fill="both", expand=True)
-        cuon.pack(side="right", fill="y")
-        self.o_chu.insert("1.0", self.cd.get("van_ban", ""))
-        self.o_chu.bind("<<Modified>>", self._dem_chu)
+        cuon_trai.pack(side="right", fill="y")
+        self.o_chu.tag_config("dang_doc", background="#fef08a", foreground="#000000")
 
+        # Bảng phải: Bản dịch tham khảo
+        cot_phai = ttk.Frame(khung_paned)
+        khung_paned.add(cot_phai, weight=1)
+
+        tieu_phai = ttk.Frame(cot_phai)
+        tieu_phai.pack(fill="x", pady=(0, 4))
+        ttk.Label(tieu_phai, text="Bản dịch tham khảo (tiếng Việt)", font=("Segoe UI Semibold", 10),
+                  foreground="#1f2937").pack(side="left")
+        self.nut_dich = ttk.Button(tieu_phai, text="Dịch sang tiếng Việt", command=self._dich_van_ban)
+        self.nut_dich.pack(side="right")
+        ttk.Button(tieu_phai, text="Xoá dịch", command=lambda: self.o_dich.delete("1.0", "end")).pack(side="right", padx=4)
+
+        khung_text_phai = ttk.Frame(cot_phai)
+        khung_text_phai.pack(fill="both", expand=True)
+        self.o_dich = tk.Text(khung_text_phai, wrap="word", font=("Segoe UI", 11), relief="solid",
+                              borderwidth=1, padx=10, pady=8, undo=True, bg="#fcfcfd")
+        cuon_phai = ttk.Scrollbar(khung_text_phai, command=self.o_dich.yview)
+        self.o_dich.configure(yscrollcommand=cuon_phai.set)
+        self.o_dich.pack(side="left", fill="both", expand=True)
+        cuon_phai.pack(side="right", fill="y")
+        self.o_dich.tag_config("dang_doc", background="#fef08a", foreground="#000000")
+
+        # Nạp dữ liệu cũ
+        self.o_chu.insert("1.0", self.cd.get("van_ban", ""))
+        self.o_dich.insert("1.0", self.cd.get("ban_dich", ""))
+        self.o_chu.bind("<<Modified>>", self._dem_chu)
         self._dem_chu()
 
     # --- danh sách giọng ---
@@ -433,35 +527,38 @@ class App(tk.Tk):
             self.giong = ds
             if moi:
                 self.after(0, self._nap_ngon_ngu)
-            self.after(0, lambda: self.trang_thai.set(f"Sẵn sàng · {len(ds)} giọng"))
+            self.after(0, lambda: self.trang_thai.set(f"Đã tải {len(ds)} giọng từ máy chủ."))
         except Exception as e:
-            if not self.giong:
-                self.after(0, lambda e=e: self.trang_thai.set(f"Không tải được danh sách giọng: {e}"))
+            self.after(0, lambda e=e: self.trang_thai.set(f"Không tải được danh sách giọng: {e}"))
 
     def _nap_ngon_ngu(self):
-        locales = sorted({v["Locale"] for v in self.giong})
-        uu_tien = [l for l in ("vi-VN", "en-US", "en-AU", "en-GB") if l in locales]
-        locales = uu_tien + [l for l in locales if l not in uu_tien]
-        self._locales = locales
-        self.ngon_ngu["values"] = [f"{TEN_NGON_NGU.get(l, l)} ({l})" if l in TEN_NGON_NGU else l for l in locales]
-        l = self.cd.get("ngon_ngu", "en-AU")
-        self.ngon_ngu.current(locales.index(l) if l in locales else 0)
-        self._nap_giong(self.cd.get("giong", "en-AU-WilliamMultilingualNeural"))
+        co_san = {v["Locale"] for v in self.giong}
+        uu_tien = ["vi-VN", "en-US", "en-AU", "en-GB"]
+        ds = [loc for loc in uu_tien if loc in co_san] + sorted(co_san - set(uu_tien))
+        self._locales = ds
+        self.ngon_ngu["values"] = [f"{TEN_NGON_NGU.get(loc, loc)} ({loc})" for loc in ds]
+        chon = self.cd.get("ngon_ngu", "en-AU")
+        idx = ds.index(chon) if chon in ds else (ds.index("vi-VN") if "vi-VN" in ds else 0)
+        self.ngon_ngu.current(idx)
+        self._nap_giong()
 
-    def _nap_giong(self, chon=None):
+    def _nap_giong(self):
         loc = self._locales[self.ngon_ngu.current()]
-        ds = sorted((v for v in self.giong if v["Locale"] == loc),
-                    key=lambda v: ("Multilingual" not in v["ShortName"], v["ShortName"]))
+        ds = [v for v in self.giong if v["Locale"] == loc]
         self._ds_giong = [v["ShortName"] for v in ds]
         self.chon_giong["values"] = [ten_hien_thi(v) for v in ds]
-        if ds:
-            self.chon_giong.current(self._ds_giong.index(chon) if chon in self._ds_giong else 0)
+        luu = self.cd.get("giong")
+        if luu in self._ds_giong:
+            self.chon_giong.current(self._ds_giong.index(luu))
+        else:
+            multi = [i for i, v in enumerate(ds) if "Multilingual" in v["ShortName"]]
+            self.chon_giong.current(multi[0] if multi else 0)
 
     # --- điều khiển ---
     def _san_sang(self):
         if getattr(self, "_ds_giong", None):
             return True
-        messagebox.showinfo("Đọc Giọng", "Đang tải danh sách giọng, chờ vài giây rồi bấm lại.")
+        messagebox.showinfo("Đọc Voice", "Đang tải danh sách giọng, chờ vài giây rồi bấm lại.")
         return False
 
     def _tham_so(self):
@@ -482,8 +579,14 @@ class App(tk.Tk):
 
     def _dem_chu(self, _=None):
         t = self.o_chu.get("1.0", "end").strip()
-        self.dem.config(text=f"{len(t.split())} từ ({len(t)} ký tự)")
+        self.dem_trai.config(text=f"{len(t.split())} từ ({len(t)} ký tự)")
         self.o_chu.edit_modified(False)
+
+    def _xoa_ca_hai(self):
+        self.o_chu.delete("1.0", "end")
+        self.o_dich.delete("1.0", "end")
+        self._xoa_highlight()
+        self._dem_chu()
 
     def _mo_file(self):
         p = filedialog.askopenfilename(filetypes=[("Văn bản, Word", "*.txt *.docx *.md *.srt"), ("Tất cả", "*.*")])
@@ -493,7 +596,7 @@ class App(tk.Tk):
             try:
                 noi_dung = doc_docx(p)
             except Exception as e:
-                messagebox.showerror("Đọc Giọng", f"Không đọc được file Word:\n{e}")
+                messagebox.showerror("Đọc Voice", f"Không đọc được file Word:\n{e}")
                 return
             self.o_chu.delete("1.0", "end")
             self.o_chu.insert("1.0", noi_dung)
@@ -509,15 +612,124 @@ class App(tk.Tk):
             except Exception:
                 continue
         else:
-            messagebox.showerror("Đọc Giọng", "Không đọc được file này.")
+            messagebox.showerror("Đọc Voice", "Không đọc được file này.")
             return
         self.o_chu.delete("1.0", "end")
         self.o_chu.insert("1.0", noi_dung)
         self._dem_chu()
 
+    def _dich_van_ban(self):
+        van_ban = self.o_chu.get("1.0", "end").strip()
+        if not van_ban:
+            messagebox.showinfo("Đọc Voice", "Chưa có văn bản bên bảng đọc để dịch.")
+            return
+        self.nut_dich.state(["disabled"])
+        self.nut_dich.config(text="Đang dịch...")
+        self.trang_thai.set("Đang dịch kịch bản sang tiếng Việt...")
+
+        def lam():
+            try:
+                ban_dich = dich_tieng_viet(van_ban)
+                def cap_nhat():
+                    self.o_dich.delete("1.0", "end")
+                    self.o_dich.insert("1.0", ban_dich)
+                    self.trang_thai.set(f"Đã dịch xong ({len(ban_dich.split())} từ tiếng Việt).")
+                    self.nut_dich.config(text="Dịch sang tiếng Việt")
+                    self.nut_dich.state(["!disabled"])
+                    self._luu_cai_dat()
+                self.after(0, cap_nhat)
+            except Exception as e:
+                err_msg = str(e)
+                def bao_loi(msg=err_msg):
+                    self.trang_thai.set(f"Lỗi dịch: {msg}")
+                    self.nut_dich.config(text="Dịch sang tiếng Việt")
+                    self.nut_dich.state(["!disabled"])
+                    messagebox.showerror("Đọc Voice", f"Không dịch được:\n{msg}")
+                self.after(0, bao_loi)
+
+        threading.Thread(target=lam, daemon=True).start()
+
+    # --- highlight và phát âm thanh ---
+    def _xoa_highlight(self):
+        self.o_chu.tag_remove("dang_doc", "1.0", "end")
+        self.o_dich.tag_remove("dang_doc", "1.0", "end")
+
+    def _highlight_cau(self, chu, idx):
+        self._xoa_highlight()
+        if not chu:
+            return
+        # 1. Bảng trái: tìm câu trong self.o_chu
+        dau = chu[:min(35, len(chu))].strip()
+        if dau:
+            pos = self.o_chu.search(dau, "1.0", tk.END)
+            if pos:
+                end_pos = f"{pos}+{len(chu)}c"
+                self.o_chu.tag_add("dang_doc", pos, end_pos)
+                self.o_chu.see(pos)
+
+        # 2. Bảng phải: tìm câu dịch tương ứng
+        dich_toan_bo = self.o_dich.get("1.0", "end").strip()
+        if dich_toan_bo:
+            cac_cau_dich = [c.strip() for c in re.split(r"(?<=[.!?。！？…])\s+|\n+", dich_toan_bo) if c.strip()]
+            if 0 <= idx < len(cac_cau_dich):
+                cau_d = cac_cau_dich[idx]
+                dau_d = cau_d[:min(35, len(cau_d))].strip()
+                if dau_d:
+                    pos_d = self.o_dich.search(dau_d, "1.0", tk.END)
+                    if pos_d:
+                        end_pos_d = f"{pos_d}+{len(cau_d)}c"
+                        self.o_dich.tag_add("dang_doc", pos_d, end_pos_d)
+                        self.o_dich.see(pos_d)
+
+    def _theo_doi_phat(self):
+        if not getattr(self, "_dang_theo_doi_phat", False):
+            self._xoa_highlight()
+            return
+        da_chay = time.time() - getattr(self, "_thoi_gian_phat", 0)
+
+        cau_hien_tai = None
+        idx_hien_tai = -1
+        if self._danh_sach_cau:
+            for idx, (bd, kt, chu) in enumerate(self._danh_sach_cau):
+                if bd <= da_chay < kt:
+                    cau_hien_tai = chu
+                    idx_hien_tai = idx
+                    break
+            tong_tg = self._danh_sach_cau[-1][1]
+            if da_chay > tong_tg + 0.5:
+                self._dang_theo_doi_phat = False
+                self._xoa_highlight()
+                self.trang_thai.set("Đã phát xong.")
+                return
+
+        if idx_hien_tai != self._cau_highlight_cu:
+            self._cau_highlight_cu = idx_hien_tai
+            if cau_hien_tai:
+                self._highlight_cau(cau_hien_tai, idx_hien_tai)
+            else:
+                self._xoa_highlight()
+
+        self.after(50, self._theo_doi_phat)
+
+    def _bat_dau_phat(self, duong_dan, cau_list=None):
+        if cau_list:
+            self._danh_sach_cau = cau_list
+        self._cau_highlight_cu = -1
+        self._thoi_gian_phat = time.time()
+        self._dang_theo_doi_phat = True
+        phat(duong_dan)
+        self._theo_doi_phat()
+
+    def _dung_phat_app(self):
+        self._dang_theo_doi_phat = False
+        dung_phat()
+        self._xoa_highlight()
+        self.trang_thai.set("Đã dừng phát.")
+
     def _phat_lai(self):
         if self.file_cuoi and os.path.exists(self.file_cuoi):
-            phat(self.file_cuoi)
+            self.trang_thai.set(f"Đang phát lại: {os.path.basename(self.file_cuoi)}")
+            self._bat_dau_phat(self.file_cuoi, getattr(self, "_danh_sach_cau", None))
 
     def _nghe_thu(self):
         t = self.o_chu.get("1.0", "end").strip()
@@ -529,7 +741,7 @@ class App(tk.Tk):
     def _chuyen(self):
         t = self.o_chu.get("1.0", "end").strip()
         if not t:
-            messagebox.showinfo("Đọc Giọng", "Chưa có văn bản.")
+            messagebox.showinfo("Đọc Voice", "Chưa có văn bản bên bảng đọc.")
             return
         if not self._san_sang():
             return
@@ -540,19 +752,29 @@ class App(tk.Tk):
         if p:
             self._chay(t, p)
 
+    def _highlight_doan_dang_chuyen(self, text_doan):
+        self._xoa_highlight()
+        dau = text_doan[:min(40, len(text_doan))].strip()
+        if dau:
+            pos = self.o_chu.search(dau, "1.0", tk.END)
+            if pos:
+                end_pos = f"{pos}+{len(text_doan)}c"
+                self.o_chu.tag_add("dang_doc", pos, end_pos)
+                self.o_chu.see(pos)
+
     def _chay(self, van_ban, duong_ra, nghe_thu=False):
         if self.dang_chay:
             return
         self.dang_chay = True
-        dung_phat()
+        self._dung_phat_app()
         self.nut_chuyen.state(["disabled"])
         self.nut_thu.state(["disabled"])
         giong, toc, cao = self._tham_so()
         self._luu_cai_dat()
         td = doc_tu_dien()
         self._tu_dien_luot = (ban_do_cau(van_ban, td), tu_dien_cho_srt(van_ban, td))
-        van_ban = ap_tu_dien(van_ban, td)
-        threading.Thread(target=self._lam, args=(van_ban, duong_ra, giong, toc, cao, nghe_thu),
+        van_ban_doc = ap_tu_dien(van_ban, td)
+        threading.Thread(target=self._lam, args=(van_ban_doc, duong_ra, giong, toc, cao, nghe_thu),
                          daemon=True).start()
 
     def _lam(self, van_ban, duong_ra, giong, toc, cao, nghe_thu):
@@ -560,7 +782,7 @@ class App(tk.Tk):
         xong = [0]
         if not doan:
             self.after(0, self._bao, "Không có chữ nào để đọc", 0)
-            self.after(0, lambda: messagebox.showwarning("Đọc Giọng", "Văn bản không có chữ nào để đọc."))
+            self.after(0, lambda: messagebox.showwarning("Đọc Voice", "Văn bản không có chữ nào để đọc."))
             self.after(0, self._xong)
             return
 
@@ -569,6 +791,7 @@ class App(tk.Tk):
 
             async def mot(d):
                 async with khoa:
+                    self.after(0, lambda d=d: self._highlight_doan_dang_chuyen(d))
                     b = await tao_doan(d, giong, toc, cao)
                 xong[0] += 1
                 self.after(0, self._bao, f"Đã chuyển {xong[0]}/{len(doan)} đoạn...", xong[0] / len(doan) * 100)
@@ -587,11 +810,13 @@ class App(tk.Tk):
                 with open(os.path.splitext(duong_ra)[0] + ".srt", "w", encoding="utf-8") as f:
                     f.write(tao_srt(ket_qua, self._tu_dien_luot))
             self.file_cuoi = duong_ra
-            self.after(0, self._bao, "Đang phát thử" if nghe_thu else f"Xong: {duong_ra}", 100)
-            self.after(0, phat, duong_ra)
+            cau_list = lay_danh_sach_cau(ket_qua, self._tu_dien_luot)
+            self._danh_sach_cau = cau_list
+            self.after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}", 100)
+            self.after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))
         except Exception as e:
             self.after(0, self._bao, f"Lỗi: {e}", 0)
-            self.after(0, lambda e=e: messagebox.showerror("Đọc Giọng", f"Không chuyển được:\n{e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Đọc Voice", f"Không chuyển được:\n{e}"))
         finally:
             self.after(0, self._xong)
 
@@ -623,21 +848,21 @@ class App(tk.Tk):
             moi = kiem_ban_moi()
         except Exception as e:
             if chu_dong:
-                self.after(0, lambda e=e: messagebox.showwarning("Đọc Giọng", f"Không kiểm được bản mới:\n{e}"))
+                self.after(0, lambda e=e: messagebox.showwarning("Đọc Voice", f"Không kiểm được bản mới:\n{e}"))
             return
         if not moi:
             if chu_dong:
-                self.after(0, lambda: messagebox.showinfo("Đọc Giọng", f"Đang dùng bản mới nhất (v{PHIEN_BAN})."))
+                self.after(0, lambda: messagebox.showinfo("Đọc Voice", f"Đang dùng bản mới nhất (v{PHIEN_BAN})."))
             return
         self.after(0, self._hoi_cap_nhat, *moi)
 
     def _hoi_cap_nhat(self, ban, asset):
         if not getattr(sys, "frozen", False):
-            messagebox.showinfo("Đọc Giọng", f"Có bản v{ban}. Bản chạy bằng Python thì cập nhật bằng git pull.")
+            messagebox.showinfo("Đọc Voice", f"Có bản v{ban}. Bản chạy bằng Python thì cập nhật bằng git pull.")
             return
         if self.dang_chay:
             return  # đang chuyển đổi thì không hỏi, lần mở sau hỏi lại
-        if not messagebox.askyesno("Đọc Giọng", f"Có bản mới v{ban} (đang dùng v{PHIEN_BAN}).\nCập nhật ngay?"):
+        if not messagebox.askyesno("Đọc Voice", f"Có bản mới v{ban} (đang dùng v{PHIEN_BAN}).\nCập nhật ngay?"):
             return
         self.trang_thai.set(f"Đang tải bản v{ban}...")
         self.dang_chay = True
@@ -652,7 +877,7 @@ class App(tk.Tk):
                 self.after(0, self._xong)
                 self.after(0, self._bao, f"Cập nhật lỗi: {e}", 0)
                 self.after(0, lambda e=e: messagebox.showerror(
-                    "Đọc Giọng", f"Không tự cập nhật được, app cũ vẫn dùng bình thường:\n{e}"
+                    "Đọc Voice", f"Không tự cập nhật được, app cũ vẫn dùng bình thường:\n{e}"
                     f"\n\nTải tay tại github.com/{KHO_GITHUB}/releases"))
         threading.Thread(target=lam, daemon=True).start()
 
@@ -672,6 +897,7 @@ class App(tk.Tk):
                 "giong": self._ds_giong[self.chon_giong.current()],
                 "cao_do": self.cao_do.get(), "toc_do": self.toc_do.get(),
                 "van_ban": self.o_chu.get("1.0", "end").strip()[:50000],
+                "ban_dich": self.o_dich.get("1.0", "end").strip()[:50000],
             })
         except Exception:
             pass
@@ -679,7 +905,7 @@ class App(tk.Tk):
     def _thoat(self):
         if hasattr(self, "_ds_giong"):
             self._luu_cai_dat()
-        dung_phat()
+        self._dung_phat_app()
         self.destroy()
 
 
@@ -696,7 +922,7 @@ def tu_thu(nhat_ky):
             moi = kiem_ban_moi()
             f.write(f"ban moi: {moi}\n")
             if moi:
-                mo_lai = bool(os.environ.get("DOCGIONG_KIEM_MO"))
+                mo_lai = bool(os.environ.get("DOCVOICE_KIEM_MO") or os.environ.get("DOCGIONG_KIEM_MO"))
                 thay_exe(moi[1], mo_lai=mo_lai)
                 f.write(f"da thay exe, mo lai={mo_lai}\n")
         except Exception as e:
@@ -707,11 +933,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--tu-thu":
         don_exe_cu()
         tu_thu(sys.argv[2])
-    elif os.environ.get("DOCGIONG_KIEM_MO") and che_do_thu():
+    elif (os.environ.get("DOCVOICE_KIEM_MO") or os.environ.get("DOCGIONG_KIEM_MO")) and che_do_thu():
         # kiểm đường mở lại sau cập nhật: dựng app ẩn, ghi nhật ký rồi thoát
         app = App()
         app.withdraw()
-        with open(os.environ["DOCGIONG_KIEM_MO"], "a", encoding="utf-8") as f:
+        kiem_mo = os.environ.get("DOCVOICE_KIEM_MO") or os.environ.get("DOCGIONG_KIEM_MO")
+        with open(kiem_mo, "a", encoding="utf-8") as f:
             f.write(f"mo lai ok: v{PHIEN_BAN} giao dien dung xong, exe={sys.executable}\n")
         app.destroy()
     else:
