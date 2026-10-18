@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Đọc Voice v1.2.0 · Cài đặt và Hỗ trợ YouTube Kịch bản</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #f3f4f6;
+    color: #1f2937;
+    margin: 0;
+    padding: 24px;
+  }
+  .container {
+    max-width: 1040px;
+    margin: 0 auto;
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 32px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  }
+  h1 {
+    color: #111827;
+    margin-top: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 26px;
+  }
+  .badge {
+    background: #10b981;
+    color: white;
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .desc {
+    color: #4b5563;
+    font-size: 15px;
+    margin-bottom: 24px;
+    line-height: 1.6;
+  }
+  .preview-box {
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 24px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    background: #f9fafb;
+    text-align: center;
+  }
+  .preview-box img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .card h3 {
+    margin-top: 0;
+    font-size: 16px;
+    color: #1f2937;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card p, .card ul {
+    margin: 0;
+    font-size: 14px;
+    color: #4b5563;
+    line-height: 1.5;
+  }
+  .card ul {
+    padding-left: 20px;
+    margin-top: 8px;
+  }
+  .highlight-tag {
+    background: #fef08a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+    color: #854d0e;
+  }
+  .action-box {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 16px;
+    font-size: 14px;
+    color: #1e40af;
+  }
+  .action-box a {
+    color: #2563eb;
+    font-weight: 600;
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Đọc Voice v1.2.0 <span class="badge">SẴN SÀNG PHÁT HÀNH</span></h1>
+  <p class="desc">
+    Bản nâng cấp v1.2.0 bổ sung hộp thoại Cài đặt hệ thống, bộ công cụ trợ lực sáng tạo YouTube (lọc ghi chú kịch bản, ước tính thời lượng video, phụ đề dọc Shorts / TikTok) và cơ chế cập nhật thông minh không gián đoạn luồng đọc voice.
+  </p>
+
+  <div class="preview-box">
+    <img src="giao_dien_2_bang.png" alt="Ảnh chụp thực tế Đọc Voice">
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>1. Hỗ trợ kịch bản YouTube & Shorts</h3>
+      <p>Tối ưu hóa quy trình làm video nội dung:</p>
+      <ul>
+        <li>Nút <b>Lọc kịch bản YT</b>: tự động phát hiện và lọc sạch các ghi chú đạo diễn [Intro], [B-roll], phân cảnh [Scene], âm thanh (cười nhẹ) và markdown thừa.</li>
+        <li>Ước tính thời lượng video tự động (~phút:giây) theo tốc độ đọc, gắn nhãn Shorts (&lt; 60s), Mid-roll (&gt; 8 phút) hoặc YouTube thường.</li>
+        <li>Tùy chọn xuất phụ đề SRT kiểu Shorts / TikTok: cắt ngắn 6 đến 7 từ mỗi dòng để kéo thẳng vào CapCut hoặc Premiere dựng video dọc.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>2. Bánh xe ⚙ Cài đặt & Cập nhật an toàn</h3>
+      <p>Linh hoạt cấu hình và nâng cấp không làm gián đoạn:</p>
+      <ul>
+        <li>Tùy chọn thư mục xuất file MP3 và SRT tới bất kỳ ổ đĩa nào theo ý muốn.</li>
+        <li>Bật / tắt tự động cuộn chữ theo câu đang đọc (Karaoke Auto-scroll).</li>
+        <li>Điều chỉnh số đoạn gửi máy chủ song song (2 đến 6 đoạn cùng lúc).</li>
+        <li><b>Cập nhật thông minh</b>: nếu đang đọc voice thì hoãn thông báo bản mới, đợi quá trình đọc hoàn tất mới gợi ý cập nhật, bảo vệ dữ liệu đang xuất.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="action-box">
+    <b>Thông tin bản đóng gói trên máy:</b><br>
+    - Đường dẫn file exe: <b>E:\DocGiong\dist\DocVoice.exe</b> (12.7 MB, độc lập không cần Python).<br>
+    - Đã kiểm tra 9/9 unit test tự động (test_loc_kich_ban_youtube, test_chia_cau_shorts, test_tao_srt_kieu_shorts).<br>
+    - Sẵn sàng đẩy commit và tạo GitHub Release v1.2.0 cho thành viên tải về.
+  </div>
+</div>
+</body>
+</html>
