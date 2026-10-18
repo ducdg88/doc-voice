@@ -1,0 +1,5 @@
+Dr. Alvarez joined NASA in 2009 after finishing her Ph.D. at M.I.T. She later moved to the U.S. Geological Survey, where Mr. Chen, the CEO of a small startup, asked for her help with a GPS project. Together they worked with the FBI, the UN, and the WHO on a data system that tracked weather, e.g. storms and floods, in real time.
+
+The team had to explain AI, API, and CPU limits to people who had never heard these words. Prof. Okafor from the U.K. joined by video at 8 a.m., and Ms. Rivera from St. Louis called in at 9 p.m. Their notes were stored on a USB drive, in PDF format, and shared by email, etc.
+
+It was not easy, but by Dec. 12 the demo was ready, and the whole thing ran on a single laptop.

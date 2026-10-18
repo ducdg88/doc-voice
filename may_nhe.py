@@ -56,6 +56,23 @@ NHAC_DIEU = {
     "nhấn": {"rate": "-18%", "pitch": "-1Hz"},
 }
 TAU = 0.3
+# Đọc lại một câu lỗi bằng đúng tham số cũ cho ra đúng âm thanh cũ (Edge và OpenVoice đều xác định), nên mỗi lần đọc lại
+# đổi nhẹ nhịp và cao độ: (độ lệch nhịp %, độ lệch cao độ Hz). Lần 0 là gốc.
+BIEN_THE = [(0, 0), (5, 0), (-5, 0), (9, -1), (-8, 1), (3, 2), (-3, -2), (12, 0), (-12, 0)]
+
+
+def _cong_nhac(chuoi, delta, don_vi):
+    """Cộng delta vào chuỗi như +5% hay -3Hz, trả cùng định dạng."""
+    so = int(re.sub(r"[^\d+-]", "", chuoi) or 0) + int(delta)
+    return f"{so:+d}{don_vi}"
+
+
+def nhac_dieu_bien_the(nd, bien_the=0):
+    """Nhịp, cao độ Edge cho lần đọc thứ bien_the của một câu (0 = gốc)."""
+    dr, dp = BIEN_THE[int(bien_the) % len(BIEN_THE)]
+    if not (dr or dp):
+        return dict(nd)
+    return {"rate": _cong_nhac(nd["rate"], dr, "%"), "pitch": _cong_nhac(nd["pitch"], dp, "Hz")}
 
 
 def thu_muc_may_nhe():
@@ -291,7 +308,7 @@ def so_luong_onnx(so_nhan=None, moi_truong=None):
     4 nhân x 4 luồng 0,66 (2 luồng: 1,08); máy 8 nhân trở lên giữ 4 luồng. 1 nhân thì 1 luồng.
     Biến môi trường DOCVOICE_THREADS (số nguyên từ 1) đè lên mọi thứ, trần TRAN_LUONG_ONNX (32): gõ 100000
     thì onnxruntime tạo ngần ấy luồng làm cạn RAM và treo máy (P3 chấm vòng 4)."""
-    env = os.environ if moi_truong is None else moi_truong
+    env = {"DOCVOICE_THREADS": os.environ.get("DOCVOICE_THREADS", "")} if moi_truong is None else moi_truong
     try:
         v = int(str(env.get("DOCVOICE_THREADS", "")).strip())
         if v >= 1:
@@ -312,6 +329,8 @@ class MayDocNhe:
     # trung bình 0,861; giọng Edge thô (chưa đổi) 0,729. Dưới 0,74 coi như lệch về giọng nguồn, sinh lại nhẹ hơn.
     nguong_giong = 0.74
     nhan_tien_to = False       # không đọc được lệnh cảm xúc trong ngoặc: dùng NHAC_DIEU
+    ho_tro_bien_the = True     # sinh(bien_the=n) đổi nhẹ nhịp, cao độ để đọc lại ra bản khác
+    nguong_wer = 0.10          # WER từng câu tối đa: Edge đọc đúng gần như hoàn toàn, lệch hơn thì thử biến thể khác
 
     def __init__(self, so_luong=None):
         self.ss_ref = self.ss_doi = None
@@ -431,11 +450,11 @@ class MayDocNhe:
                     ra[k][-n:] *= np.linspace(1.0, 0.0, n, dtype=np.float32)
         return np.concatenate(ra)
 
-    def sinh(self, chu, ref, ra, cfg=2.0, buoc=16, muc="Kể chuyện"):
+    def sinh(self, chu, ref, ra, cfg=2.0, buoc=16, muc="Kể chuyện", bien_the=0):
         import wave
-        nd = NHAC_DIEU.get(muc, NHAC_DIEU["Kể chuyện"])
+        nd = nhac_dieu_bien_the(NHAC_DIEU.get(muc, NHAC_DIEU["Kể chuyện"]), bien_the)
         chu = re.sub(r"^\s*\([^)]*\)", "", chu).strip()     # bỏ lệnh cảm xúc kiểu VoxCPM nếu có
-        f = self._truoc.pop((chu, muc), None)
+        f = self._truoc.pop((chu, muc), None) if not bien_the else None
         if f is not None and f.cancel():   # còn xếp hàng sau câu khác (vừa nhảy câu): tải thẳng, không chờ
             f = None
         try:

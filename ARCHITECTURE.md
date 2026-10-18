@@ -73,6 +73,9 @@ Phát hành và cập nhật / Release and update: chi tiết trong `docs/PHAT-H
 | Giọng clone | `giong_clone.py` | Chuẩn hoá tiếng Anh, chia phần, gọi máy đọc, kiểm whisper, ghép, hậu kỳ, srt, dòng lệnh / Clone pipeline and CLI |
 | Máy đọc nhẹ | `may_nhe.py`, `may_nhe_onnx/` | Edge + OpenVoice V2 ONNX trên CPU / CPU engine |
 | Phát luồng | `phat_luong.py` | waveOut qua ctypes, phát trong lúc sinh, tạm dừng, nhảy câu, đệm thích ứng / Streaming playback |
+| Kiểm chất lượng | `kiem_chat_luong.py`, `cai-kiem-sau.ps1` | Chấm ĐẠT hoặc KHÔNG ĐẠT từng bản đọc: mất tiếng, im bất thường, lặp, thiếu từ, click chỗ ghép, sai giọng từng câu; tự đọc lại phần lỗi; báo cáo json và html; nút Chạy nhiều kịch bản. `cai-kiem-sau.ps1` cài tầng nghe lại (faster-whisper) / Quality check per take |
+| Kiểm kịch bản | `kich_ban_kiem.py` | Trước khi đọc: báo câu quá dài, ký hiệu lạ, số điện thoại, ngày, giờ, viết tắt dễ đọc sai và gợi ý sửa / Script pre-check |
+| Máy đọc GPU riêng | `may_doc_clone.py` | Chế độ Chuẩn cao (VoxCPM2 trên GPU NVIDIA) khi máy có sẵn môi trường; bản phát hành dùng chế độ Nhẹ / Optional GPU engine |
 | Test | `kiem_tra_doc_voice.py` | Test hàm chuẩn hoá, giọng clone, gói giọng, máy nhẹ, nghe luồng, tự cập nhật / Tests |
 | Đóng gói | `dong-goi.ps1`, `requirements.txt` | PyInstaller onefile; `-ArthurNhung` ra bản phát hành và quét chặn / Packaging |
 | Quét bản phát hành | `quet-ban-team.ps1` | Chặn mẫu giọng lọt vào bản đăng công khai / Release safety scan |
@@ -83,7 +86,7 @@ Phát hành và cập nhật / Release and update: chi tiết trong `docs/PHAT-H
 - Cài đặt / Settings: `cai_dat.json` (chạy mã: thư mục app; exe: `%APPDATA%\DocVoice`).
 - Thư mục tạm clone: `%APPDATA%\DocVoice\clone_tam\<mã việc>\`; có thể xoá khi không cần chạy tiếp.
 - Model máy Nhẹ / Light engine model: `%LOCALAPPDATA%\DocVoice\may_nhe\` (OpenVoice V2, MIT, Hugging Face), ffmpeg LGPL ghim đúng một bản, kiểm sha256.
-- Giọng Arthur: dấu giọng 1 KB nằm trong exe (`giong_nhung/arthur/se.npy`), không thể khôi phục âm thanh từ đó. / Arthur: a 1 KB voice fingerprint inside the exe; no audio can be recovered from it.
+- Giọng Arthur (giọng mặc định đi kèm app): dấu giọng 1 KB `giong_nhung/arthur/se.npy` nằm trong kho (từ 1.6.0) và trong exe, không thể khôi phục âm thanh từ đó; mẫu âm thanh không đưa lên. / Arthur (default voice shipped with the app): a 1 KB voice fingerprint in the repo (since 1.6.0) and inside the exe; no audio can be recovered from it.
 - Giọng người dùng nhập / Imported voices: `%APPDATA%\DocVoice\giong_clone\<tên>\`, gói phải ghi rõ quyền sử dụng.
 - Tích hợp / Integrations: Edge TTS, Google Translate endpoint, Hugging Face (tải model), ffmpeg, faster-whisper (tuỳ chọn).
 - Không dùng API trả phí, không đọc khoá hay token nào. / No paid API, no keys or tokens read.
@@ -94,8 +97,10 @@ Phát hành và cập nhật / Release and update: chi tiết trong `docs/PHAT-H
 - Bản 1.0.0 (Đọc Giọng) không tự cập nhật được, cần tải tay. / v1.0.0 cannot auto-update; download manually.
 - Chỉ nhập và dùng giọng khi bạn có quyền hợp pháp với giọng đó. / Only use voices you are legally allowed to use.
 - Exe chưa ký số nên Windows SmartScreen có thể cảnh báo. / The exe is unsigned; SmartScreen may warn.
+- Proxy: app mở từ tiến trình có `HTTPS_PROXY` trỏ về `127.0.0.1` mà cổng đã chết thì trước 1.6.0 ô Ngôn ngữ, ô Giọng trống. Từ 1.6.0 `ap_proxy_cho_app()` bỏ proxy máy này đã chết lúc mở, giữ proxy còn sống và proxy ở máy khác, và Arthur luôn được nạp trước danh sách Edge. / A dead local proxy no longer empties the voice list; Arthur is always loaded first.
 
 ## 7. Phiên bản / Versions
 | Bản / Version | Nội dung / Changes |
 |---|---|
 | 1.5.0 | Chế độ Nhẹ trên CPU, gói giọng `.dgvoice`, Đọc kịch bản YouTube một nút, nghe ngay, mức cảm xúc Tự động theo kịch bản, bản Arthur có sẵn (nhúng dấu giọng, không mẫu âm thanh), tự cập nhật giữ lựa chọn người dùng. / CPU Light engine, voice packs, one-button YouTube script reading, instant play, auto emotion level, Arthur built in as a voice fingerprint, no audio sample. |
+| 1.6.0 | Kiểm chất lượng bản đọc và Chạy nhiều kịch bản, Kiểm kịch bản trước khi đọc, chuẩn hoá số, giờ, ngày, điện thoại, đọc lại phần lỗi bằng biến thể, tiến độ khi đọc, Arthur luôn có sẵn kể cả khi mạng hay proxy lỗi, bỏ proxy máy này đã chết, dấu giọng Arthur nằm trong kho. / Quality check and batch scripts, script pre-check, better number and time normalisation, retry with variations, progress line, Arthur always available even when network or proxy fails, dead local proxy cleanup, Arthur fingerprint in the repo. |

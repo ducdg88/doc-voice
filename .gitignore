@@ -25,5 +25,9 @@ dist/
 DocVoice.exe.sha256
 phat-hanh/
 
-# dấu giọng Arthur nhúng vào bản đóng sẵn (suy từ mẫu của bên thứ ba), tạo lại bằng tao_dau_giong.py
-giong_nhung/
+# dấu giọng Arthur (giọng mặc định đi kèm app, 1 KB, tạo bằng tao_dau_giong.py) nằm trong git;
+# file khác trong giong_nhung thì không. Mẫu âm thanh ref.wav, ref.txt vẫn không vào git.
+giong_nhung/*
+!giong_nhung/arthur/
+giong_nhung/arthur/*
+!giong_nhung/arthur/se.npy

@@ -5,6 +5,7 @@
 # Máy đọc nhẹ: đồ thị ONNX may_nhe_onnx\ đi kèm exe, trọng số tải lần đầu từ Hugging Face.
 # Bản Arthur mặc định: -ArthurNhung ra dist\arthur\DocVoice.exe, chỉ nhúng DẤU GIỌNG giong_nhung\arthur\se.npy
 # (256 số, 1 KB, chỉ chế độ Nhẹ dùng được), KHÔNG nhúng ref.wav, ref.txt hay gói .dgvoice. Tạo se.npy: tao_dau_giong.py.
+# Kiểm chất lượng bản đọc: kiem_chat_luong.py đi kèm exe (tầng tín hiệu luôn chạy; tầng nghe lại cần Python có faster-whisper).
 # Dùng: powershell -NoProfile -ExecutionPolicy Bypass -File dong-goi.ps1 [-KhongGiongMau | -ArthurNhung]
 param([switch]$KhongGiongMau, [switch]$ArthurNhung)
 if ($KhongGiongMau -and $ArthurNhung) { throw "Chọn một trong -KhongGiongMau hoặc -ArthurNhung" }
@@ -18,7 +19,9 @@ if (-not (Test-Path .venv\Scripts\python.exe)) {
 $them = @(
     '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_ref.onnx;may_nhe_onnx",
     '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_doi.onnx;may_nhe_onnx",
-    '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_cong_thuc.json;may_nhe_onnx"
+    '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_cong_thuc.json;may_nhe_onnx",
+    '--hidden-import', 'kiem_chat_luong',                      # nút Kiểm chất lượng
+    '--add-data', "$PSScriptRoot\may_doc_clone.py;."            # máy đọc GPU riêng (chỉ Chuẩn cao)
 )
 $ra = 'dist'
 if ($KhongGiongMau) {
@@ -30,6 +33,11 @@ if ($KhongGiongMau) {
 } else {
     $them += @('--add-data', "$PSScriptRoot\giong_mau\arthur\ref.wav;giong_mau\arthur",
                '--add-data', "$PSScriptRoot\giong_mau\arthur\ref.txt;giong_mau\arthur")
+    # bản đầy đủ cho máy chủ dự án (không phát hành): mẫu ref.wav cho Chuẩn cao (GPU) và Nhẹ, kèm dấu giọng
+    # se.npy dự phòng; app thấy ref.wav đóng sẵn thì ghi "(bản đầy đủ)" ở tiêu đề, không tự cập nhật sang bản GitHub.
+    if (Test-Path "$PSScriptRoot\giong_nhung\arthur\se.npy") {
+        $them += @('--add-data', "$PSScriptRoot\giong_nhung\arthur\se.npy;giong_nhung\arthur")
+    }
 }
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name DocVoice `
     --distpath $ra --workpath build --specpath build @them doc_voice.py

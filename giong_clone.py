@@ -13,6 +13,7 @@ ffmpeg, và (tuỳ chọn) một python có faster-whisper để kiểm từng p
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -29,9 +30,11 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 TIEN_TO_CLONE = "clone:"
 
 # Mức cảm xúc: tiền tố mô tả giọng đặt trong ngoặc ở đầu câu (Controllable Voice Cloning của
-# VoxCPM2, model không đọc phần ngoặc) + cfg. Tiền tố ngắn để cả câu lọt khung 120 ký tự của
-# máy đọc nóng (quá khung máy đọc tự cắt và phần sau mất tiền tố, giọng lệch cảm xúc).
+# VoxCPM2, model không đọc phần ngoặc) + cfg + tốc độ. Mọi mức dùng CÙNG một mẫu giọng (ref), chỉ
+# đổi tiền tố, cfg và tốc độ, nên giọng giữ nguyên trên mọi câu. Tiền tố ngắn để cả câu lọt khung.
+MUC_TU_DONG = "Tự động theo kịch bản"
 MUC_CAM_XUC = {
+    MUC_TU_DONG: {"tien_to": "", "cfg": 2.0, "toc": 1.0, "tu_dong": True},
     "Trung tính": {"tien_to": "", "cfg": 2.0, "toc": 0.94},
     "Kể chuyện": {"tien_to": "(warm storyteller)", "cfg": 2.0, "toc": 0.97},
     "Hào hứng": {"tien_to": "(very excited, enthusiastic, energetic, upbeat)", "cfg": 2.5, "toc": 1.0},
@@ -76,6 +79,13 @@ def la_the_sac_thai(chu):
     return THE_SAC_THAI.get(m.group(1).strip().lower()) if m else None
 
 
+def bo_the(chu):
+    """Bỏ thẻ sắc thái ([hồi hộp], [hào hứng]...) khỏi chữ đọc, giữ nguyên các [..] khác (ví dụ [nghỉ 2s])."""
+    chu = _RE_THE.sub(lambda m: "" if THE_SAC_THAI.get(m.group(1).strip().lower()) else m.group(0), chu or "")
+    chu = re.sub(r"[ \t]{2,}", " ", chu)
+    return re.sub(r"[ \t]*\n[ \t]*", "\n", chu).strip()
+
+
 def phan_loai_cau(cau, i_doan=1, so_doan=3):
     """Câu -> sắc thái, chạy bằng luật trên máy. Thứ tự ưu tiên: kêu gọi like, subscribe (thân thiện);
     câu một hai từ (nhấn); nguy hiểm, sợ hãi (căng thẳng); khám phá, kết quả (hào hứng);
@@ -100,7 +110,8 @@ GIONG_CLONE = {
                "quyen_dung": "Giọng Arthur dựng bằng tổng hợp giọng nói, kèm sẵn trong ứng dụng."},
 }
 
-KHUNG_MAY_DOC = 118          # máy đọc nóng tự cắt câu dài hơn 120 ký tự
+KHUNG_MAY_DOC = 118          # khung ký tự mỗi lần sinh (giữ như cũ để chất lượng không đổi)
+TIEN_TO_DAI_NHAT = max(len(v["tien_to"]) for v in list(SAC_THAI.values()) + list(MUC_CAM_XUC.values()))
 LANG_CAU = 0.36              # giây lặng giữa hai câu
 LANG_DOAN = 0.78             # giây lặng giữa hai đoạn văn
 LANG_PHAY = 0.14             # giây lặng ở chỗ câu dài bị cắt đôi
@@ -180,24 +191,72 @@ _VIET_TAT = [
     (r"\bSt\.", "Saint"), (r"\bvs\.?", "versus"), (r"\be\.g\.", "for example"),
     (r"\bi\.e\.", "that is"), (r"\betc\.", "et cetera"), (r"\bapprox\.", "approximately"),
     (r"\bU\.S\.A?\.?", "U S"), (r"\bU\.K\.", "U K"), (r"\bNo\.\s*(?=\d)", "number "),
+    (r"\bProf\.", "Professor"), (r"\bJr\.", "Junior"), (r"\bSr\.", "Senior"), (r"\bGen\.", "General"),
+    (r"\bCapt\.", "Captain"), (r"\bLt\.", "Lieutenant"), (r"\bSgt\.", "Sergeant"), (r"\bRev\.", "Reverend"),
+    (r"\bGov\.", "Governor"), (r"\bSen\.", "Senator"), (r"\bInc\.", "Incorporated"), (r"\bLtd\.", "Limited"),
+    (r"\bAve\.", "Avenue"), (r"\bBlvd\.", "Boulevard"), (r"\bMt\.\s*(?=[A-Z])", "Mount "),
 ]
+_THANG = {"Jan": "January", "Feb": "February", "Mar": "March", "Apr": "April", "Jun": "June", "Jul": "July",
+          "Aug": "August", "Sep": "September", "Sept": "September", "Oct": "October", "Nov": "November",
+          "Dec": "December"}
 _DON_VI_DO = {"km": "kilometers", "kg": "kilograms", "cm": "centimeters", "mm": "millimeters",
               "mph": "miles per hour", "km/h": "kilometers per hour", "m": "meters",
-              "ft": "feet", "lb": "pounds", "lbs": "pounds", "°C": "degrees Celsius",
-              "°F": "degrees Fahrenheit", "GB": "gigabytes", "MB": "megabytes"}
+              "ft": "feet", "lb": "pounds", "lbs": "pounds", "\u00b0C": "degrees Celsius",
+              "\u00b0F": "degrees Fahrenheit", "GB": "gigabytes", "MB": "megabytes", "TB": "terabytes",
+              "KB": "kilobytes", "kW": "kilowatts", "kWh": "kilowatt hours", "MW": "megawatts",
+              "Hz": "hertz", "kHz": "kilohertz", "MHz": "megahertz", "GHz": "gigahertz",
+              "ml": "milliliters", "mL": "milliliters", "mg": "milligrams", "mAh": "milliamp hours",
+              "L": "liters", "g": "grams"}
+_PHAN_SO = {"1/2": "one half", "1/3": "one third", "2/3": "two thirds", "1/4": "one quarter",
+            "3/4": "three quarters"}
+
+
+def _doc_tung_so(s):
+    """Dãy chữ số đọc từng số một, gom nhóm 3 để có nhịp: 5551234567 -> five five five, one two three, four five six seven."""
+    d = [_DON_VI[int(c)] for c in s]
+    nhom = [" ".join(d[i:i + 3]) for i in range(0, len(d), 3)]
+    return ", ".join(nhom)
+
+
+def _gio_thanh_chu(h, m, ap=""):
+    h, m = int(h), int(m)
+    ra = so_thanh_chu(h)
+    if m:
+        ra += (" oh " + so_thanh_chu(m)) if m < 10 else (" " + so_thanh_chu(m))
+    elif not ap:
+        ra += " o\x27clock"
+    if ap:
+        ra += " " + ap.upper() + " M"
+    return ra
 
 
 def chuan_hoa_tieng_anh(chu):
-    """Đưa chữ về dạng máy đọc phát âm đúng: số, năm, %, $, ký hiệu, viết tắt, dấu đặc biệt."""
+    """Đưa chữ về dạng máy đọc phát âm đúng: số, năm, %, $, giờ, số điện thoại, đơn vị, viết tắt, dấu đặc biệt."""
     s = chu
-    s = s.replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+    s = s.replace("\u2019", "\x27").replace("\u2018", "\x27").replace("\u201c", "\x22").replace("\u201d", "\x22")
     s = re.sub(r"\s*[\u2013\u2014]\s*", ", ", s)          # gạch dài -> ngắt phẩy
     s = s.replace("\u2026", "...")
+    s = re.sub(r"\b(Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec)\.?\s+(?=\d)",
+               lambda m: _THANG[m.group(1)] + " ", s)       # Dec. 12 -> December 12
     for mau, thay in _VIET_TAT:
         s = re.sub(mau, thay, s)
+    s = re.sub(r"\band/or\b", "and or", s, flags=re.I)
     s = s.replace("&", " and ").replace("+", " plus ").replace("=", " equals ")
-    # $12.5 million, $300
-    s = re.sub(r"\$(\d[\d,]*(?:\.\d+)?)(?:\s*(million|billion|trillion|thousand))?",
+    # giờ: 9:30 p.m. -> nine thirty P M ; 8:30 -> eight thirty
+    s = re.sub(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\s*(?:([ap])\.?\s?m\b\.?)?(?![\d:])",
+               lambda m: _gio_thanh_chu(m.group(1), m.group(2), m.group(3) or ""), s, flags=re.I)
+    s = re.sub(r"\b(1[0-2]|[1-9])\s*([ap])\.?\s?m\b\.?", lambda m: so_thanh_chu(int(m.group(1))) + " " + m.group(2).upper() + " M", s, flags=re.I)
+    # số điện thoại, dãy số dài: đọc từng số
+    s = re.sub(r"(?<![\d,.])(?:\+?\d{1,2}[-. ])?(?:\(?\d{3}\)?[-. ])\d{3}[-. ]\d{4}(?![\d,.]\d)",
+               lambda m: _doc_tung_so(re.sub(r"\D", "", m.group(0))), s)
+    s = re.sub(r"(?<![\d,.])\d{3}-\d{4}(?![\d,.]\d)", lambda m: _doc_tung_so(re.sub(r"\D", "", m.group(0))), s)
+    s = re.sub(r"(?<![\d,.])\d{8,}(?![\d,.]\d)", lambda m: _doc_tung_so(m.group(0)), s)
+    # 5M, 2.5B, 300K sau ký hiệu đô la -> million, billion, thousand
+    s = re.sub(r"\x24(\d[\d,]*(?:\.\d+)?)\s?(K|M|B|bn|mn)\b",
+               lambda m: "\x24" + m.group(1) + " " + {"K": "thousand", "M": "million", "mn": "million",
+                                                      "B": "billion", "bn": "billion"}[m.group(2)], s)
+    # đô la: 12.5 million dollars, 300 dollars
+    s = re.sub(r"\x24(\d[\d,]*(?:\.\d+)?)(?:\s*(million|billion|trillion|thousand))?",
                lambda m: _so_thap_phan(m.group(1)) + (" " + m.group(2) if m.group(2) else "") + " dollars", s)
     s = re.sub(r"(\d[\d,]*(?:\.\d+)?)\s*%", lambda m: _so_thap_phan(m.group(1)) + " percent", s)
     # khoảng năm 1990s, 1800s
@@ -206,11 +265,19 @@ def chuan_hoa_tieng_anh(chu):
                else nam_thanh_chu(m.group(1) + m.group(2)) + "s", s)
     # thứ tự 1st 2nd 23rd 4th
     s = re.sub(r"\b(\d+)(st|nd|rd|th)\b", lambda m: thu_tu_thanh_chu(m.group(1)), s)
-    # đơn vị đo sau số
-    s = re.sub(r"(\d[\d,]*(?:\.\d+)?)\s?(km/h|°C|°F|km|kg|cm|mm|mph|ft|lbs|lb|GB|MB|m)\b",
-               lambda m: m.group(1) + " " + _DON_VI_DO[m.group(2)], s)
+    # đơn vị đo sau số (dài trước ngắn)
+    dv = "|".join(re.escape(k) for k in sorted(_DON_VI_DO, key=len, reverse=True))
+    s = re.sub(r"(\d[\d,]*(?:\.\d+)?)\s?(" + dv + r")(?![\w/])", lambda m: m.group(1) + " " + _DON_VI_DO[m.group(2)], s)
+    s = re.sub(r"(\d+(?:\.\d+)?)\s?x\b", lambda m: m.group(1) + " times", s)          # 2.5x -> two point five times
+    # phân số và cặp số: 3/4, 24/7, 50/50, 9/11
+    s = re.sub(r"(?<![\d/])(\d+/\d+)(?![\d/])", lambda m: _PHAN_SO.get(m.group(1), m.group(1).replace("/", " ")), s)
+    # khoảng số: 3-4 weeks, 2019-2020 -> to
+    s = re.sub(r"(?<![\w.-])(\d+)\s?-\s?(\d+)(?![\w.-])", r"\1 to \2", s)
     # năm đứng một mình (1000 đến 2099, không có dấu phẩy nghìn)
     s = re.sub(r"(?<![\d,.])(1[0-9]{3}|20[0-9]{2})(?![\d,.]\d)", lambda m: nam_thanh_chu(m.group(1)), s)
+    # 4K, 5G, 3D, 6E, 10K, B12, X2: chữ rời khỏi số để đọc từng chữ cái
+    s = re.sub(r"\b(\d+)([A-Z])\b", r"\1 \2", s)
+    s = re.sub(r"\b([A-Z])(\d{1,3})\b", r"\1 \2", s)
     # số thập phân, số có dấu phẩy nghìn, số nguyên
     s = re.sub(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+", lambda m: _so_thap_phan(m.group(0)), s)
     s = re.sub(r"\s*[()\[\]]\s*", ", ", s)     # ngoặc giữa câu -> ngắt phẩy (ngoặc đầu câu là lệnh giọng)
@@ -246,7 +313,17 @@ def wer(goc, nghe):
 
 
 # ---------------------------------------------------------------- chia câu cho giọng clone
-_CAT_CAU = re.compile(r"(?<=[.!?])[\"')\]]*\s+(?=[\"'(\[]?[A-Z0-9])")
+# vi\u1ebft t\u1eaft c\u00f3 d\u1ea5u ch\u1ea5m (Mr. Smith, Dr. Watson, e.g. This) kh\u00f4ng ph\u1ea3i h\u1ebft c\u00e2u
+_KHONG_HET_CAU = "".join(rf"(?<!\b{t}\.)" for t in (
+    "Mr", "Mrs", "Ms", "Dr", "St", "Jr", "Sr", "Prof", "vs", "No", "Mt", "Ft", r"e\.g", r"i\.e", "etc", r"U\.S",
+    "approx", "Gen", "Capt", "Lt", "Sgt", "Rev", "Gov", "Sen", "Inc", "Ltd", "Ave", "Blvd",
+    "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sept", "Sep", "Oct", "Nov", "Dec"))
+_CAT_CAU = re.compile(_KHONG_HET_CAU + r"(?<=[.!?\u2026])[\"')\]]*\s+(?=[\"'(\[]?[A-Z0-9])|(?<=\u2026)\s+|"
+                      r"(?<=\.\.\.)\s+")
+
+
+def _ket_lung(chu):
+    return chu.rstrip("\"')] ").endswith(("\u2026", "..."))
 
 
 def _cat_cau_dai(cau, toi_da):
@@ -846,13 +923,215 @@ class MayDocGPURieng(MayDocVoxCPM):
             except Exception:
                 self.tt.kill()
             self.tt = None
+# ---------------------------------------------------------------- máy đọc RIÊNG của Đọc Voice (vòng 2)
+TEN_MAY_DOC = "may_doc_clone.py"
+BUOC_SINH = 16                 # số bước khuếch tán mỗi patch (đo ở docs/NV-arthur/toc-do.md)
+CHE_DO_SINH = "goc"            # vòng sinh của máy đọc: "goc" (thư viện) | "do_thi" (CUDA graph, chỉ bật
+                               # sau khi đo khớp eager và nhanh hơn, xem docs/NV-arthur/toc-do.md)
+CHO_NAP_TOI_DA = 1800          # giây chờ nạp model tối đa (ổ HDD có lúc mất 25 phút)
+CHO_MOT_CAU = 600              # giây chờ một câu tối đa
+UU_TIEN_CAO = 0x00008000 if os.name == "nt" else 0     # ABOVE_NORMAL: luồng phát lệnh GPU không bị CPU bận chen
+UU_TIEN_THAP = 0x00004000 if os.name == "nt" else 0    # BELOW_NORMAL: whisper kiểm câu chạy nền
+
+
+class MayDocRieng:
+    """Tiến trình máy đọc riêng (may_doc_clone.py, python venv VoxCPM): nạp VoxCPM2-fp16 một lần, giữ
+    nóng suốt phiên app, cache mẫu giọng một lần cho cả bài. Chết thì tự bật lại và gửi lại câu đang
+    dở. Không dùng voice_daemon.py dùng chung của DG Voice Studio, không mở cổng mạng."""
+
+    def __init__(self, thu_muc_studio=r"E:\DG Voice Studio", thu_muc_log=None, cho_nap=CHO_NAP_TOI_DA):
+        self.studio = thu_muc_studio
+        self.thu_muc_log = thu_muc_log or os.path.join(os.environ.get("TEMP", "."), "DocVoice")
+        self.cho_nap = cho_nap
+        self.p = None
+        self.hang = None
+        self.thong_tin = {}
+        self.lan_bat = 0
+        self.t_bat = None
+        self._khoa = threading.RLock()
+
+    # cấu hình lấy từ DG Voice Studio config.json (dg_root, voxcpm_python), không ghi gì vào đó
+    def _cfg(self):
+        try:
+            with open(os.path.join(self.studio, "config.json"), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def python(self):
+        return self._cfg().get("voxcpm_python") or r"E:\MONEY X3\telegram-launch-bot\.venv-voxcpm\Scripts\python.exe"
+
+    def goc_model(self):
+        goc = self._cfg().get("dg_root") or r"E:\DG Media Holding AI Mascot Building Map"
+        return os.path.join(goc, "voice-bank", "local-models", "VoxCPM2-fp16")
+
+    def ma_may(self):
+        return os.path.join(thu_muc_goc_app(), TEN_MAY_DOC)
+
+    def co_san(self):
+        return os.path.isfile(self.python()) and os.path.isdir(self.goc_model()) and os.path.isfile(self.ma_may())
+
+    def _file_nap(self):
+        return os.path.join(self.thu_muc_log, "thoi_gian_nap.json")
+
+    def giay_nap_lan_truoc(self):
+        return _doc(self._file_nap(), {}).get("giay")
+
+    @property
+    def song(self):
+        return self.p is not None and self.p.poll() is None
+
+    def trang_thai(self):
+        if self.song and self.thong_tin.get("san_sang"):
+            return {"loaded": True, "dang_nap": False, **self.thong_tin}
+        if self.song:
+            return {"loaded": False, "dang_nap": True, "giay": round(time.time() - (self.t_bat or time.time()))}
+        return {"loaded": False, "dang_nap": False}
+
+    def _doc_dong(self, cho):
+        try:
+            return self.hang.get(timeout=cho)
+        except queue.Empty:
+            return None
+
+    def _bat_tien_trinh(self):
+        os.makedirs(self.thu_muc_log, exist_ok=True)
+        log = open(os.path.join(self.thu_muc_log, "may_doc_clone.log"), "a", encoding="utf-8")
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", TQDM_DISABLE="1")
+        self.p = subprocess.Popen([self.python(), self.ma_may(), self.goc_model()],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
+                                  text=True, encoding="utf-8", errors="replace", env=env,
+                                  creationflags=NO_WINDOW | UU_TIEN_CAO)
+        self.hang = queue.Queue()
+        p, hang = self.p, self.hang
+
+        def doc():
+            for dong in p.stdout:
+                hang.put(dong)
+            hang.put("")          # hết dòng: máy đọc đã thoát
+        threading.Thread(target=doc, daemon=True).start()
+        self.thong_tin = {}
+        self.lan_bat += 1
+        self.t_bat = time.time()
+
+    def bat(self, cho_toi_da=None, bao=None):
+        with self._khoa:
+            if self.song and self.thong_tin.get("san_sang"):
+                return self.thong_tin
+            if not self.co_san():
+                raise LoiClone("Thiếu máy đọc giọng clone: cần venv VoxCPM (" + self.python() + ") và model "
+                               "VoxCPM2-fp16 (" + self.goc_model() + "). Vào Cài đặt chọn đúng thư mục DG Voice Studio.")
+            if not self.song:
+                self._bat_tien_trinh()
+            cho = cho_toi_da or self.cho_nap
+            truoc = self.giay_nap_lan_truoc()
+            nhat_ky = os.path.join(self.thu_muc_log, "may_doc_clone.log")
+            while True:
+                da = time.time() - self.t_bat
+                if da > cho:
+                    self.dong()
+                    raise LoiClone(f"Máy đọc giọng clone chưa nạp xong sau {int(cho / 60)} phút "
+                                   f"(ổ đĩa chậm?). Xem {nhat_ky}")
+                dong = self._doc_dong(3)
+                if dong is None:
+                    if bao:
+                        pt = f", khoảng {min(99, int(da * 100 / truoc))}%" if truoc else ""
+                        bao(f"Đang nạp máy đọc giọng clone ({int(da)} giây{pt}), nạp một lần cho cả phiên...")
+                    continue
+                if dong == "":
+                    self.p = None
+                    raise LoiClone("Máy đọc giọng clone thoát khi đang nạp. Xem " + nhat_ky)
+                try:
+                    r = json.loads(dong)
+                except ValueError:
+                    continue
+                if r.get("san_sang"):
+                    r["giay_cho_nap"] = round(time.time() - self.t_bat, 1)
+                    self.thong_tin = r
+                    _ghi(self._file_nap(), {"giay": r["giay_cho_nap"], "luc": time.strftime("%Y-%m-%d %H:%M:%S")})
+                    return r
+                self.dong()
+                raise LoiClone("Máy đọc giọng clone không nạp được: " + str(r.get("loi")))
+
+    def _gui(self, yc, cho):
+        self.p.stdin.write(json.dumps(yc, ensure_ascii=False) + "\n")
+        self.p.stdin.flush()
+        dong = self._doc_dong(cho)
+        if dong is None:
+            raise TimeoutError("quá giờ chờ máy đọc")
+        if dong == "":
+            raise BrokenPipeError("máy đọc đã thoát")
+        return json.loads(dong)
+
+    def sinh(self, chu, ref, ra, cfg=2.0, buoc=BUOC_SINH, bao=None):
+        with self._khoa:
+            for lan in range(2):                       # chết giữa chừng: bật lại, gửi lại đúng câu đó
+                self.bat(bao=bao)
+                try:
+                    r = self._gui({"lenh": "sinh", "text": chu, "ref": ref, "out": ra, "cfg": cfg,
+                                   "timesteps": buoc, "che_do": CHE_DO_SINH}, CHO_MOT_CAU)
+                except (BrokenPipeError, OSError, TimeoutError, ValueError) as e:
+                    self.dong()
+                    if lan == 1:
+                        raise LoiClone(f"Máy đọc giọng clone lỗi hai lần liền: {e}")
+                    if bao:
+                        bao("Máy đọc giọng clone vừa dừng, đang bật lại...")
+                    continue
+                if not r.get("ok") or not os.path.isfile(ra):
+                    raise LoiClone(r.get("loi") or "máy đọc không trả âm thanh")
+                return r
+
+    def dong(self):
+        p, self.p = self.p, None
+        self.thong_tin = {}
+        if p and p.poll() is None:
+            try:
+                p.stdin.write(json.dumps({"lenh": "thoat"}) + "\n")
+                p.stdin.flush()
+                p.wait(5)
+            except Exception:
+                pass
+            if p.poll() is None:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+
+_MAY_CHUNG = {}
+
+
+def may_doc_chung(thu_muc_studio=r"E:\DG Voice Studio", thu_muc_log=None):
+    """Một máy đọc riêng cho cả phiên app, giữ model nóng giữa các lần bấm Chuyển đổi."""
+    k = os.path.abspath(thu_muc_studio)
+    if k not in _MAY_CHUNG:
+        _MAY_CHUNG[k] = MayDocRieng(thu_muc_studio, thu_muc_log)
+    return _MAY_CHUNG[k]
+
+
+def chon_may_doc(thu_muc_studio=r"E:\DG Voice Studio", thu_muc_log=None, chung=None):
+    """Chọn máy đọc theo luật một VoxCPM2 trên GPU một lúc: máy đọc riêng đang sống thì dùng tiếp; daemon
+    dùng chung của DG Voice Studio đang chạy (đã nạp hay đang nạp, ví dụ Kobo Studio vừa bật) thì đi qua
+    nó, không nạp model thứ hai; còn lại dùng máy đọc riêng (nhanh hơn), thiếu venv hay model thì daemon."""
+    rieng = may_doc_chung(thu_muc_studio, thu_muc_log)
+    if rieng.song:
+        return rieng
+    chung = chung or MayDocVoxCPM(thu_muc_studio)
+    if chung.trang_thai().get("app"):
+        return chung
+    return rieng if rieng.co_san() else chung
+
+
+def dong_tat_ca_may():
+    for m in _MAY_CHUNG.values():
+        m.dong()
 
 
 # ---------------------------------------------------------------- kiểm đọc bằng whisper local
 _MA_KIEM = r'''
 import sys, json
 from faster_whisper import WhisperModel
-m = WhisperModel(sys.argv[1], device="cpu", compute_type="int8", cpu_threads=4)
+m = WhisperModel(sys.argv[1], device="cpu", compute_type="int8", cpu_threads=3)
 print(json.dumps({"san_sang": True}), flush=True)
 for dong in sys.stdin:
     try:
@@ -895,7 +1174,7 @@ class KiemDoc:
             f.write(_MA_KIEM)
         self.p = subprocess.Popen([python, ma, model], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
-                                  creationflags=NO_WINDOW)
+                                  creationflags=NO_WINDOW | UU_TIEN_THAP)
         dau = self.p.stdout.readline()
         if "san_sang" not in dau:
             self.dong()
@@ -1002,24 +1281,47 @@ def ma_viec(slug, muc, van_ban, may="voxcpm"):
     return h[:16]
 
 
+def khung_cho_muc(muc):
+    """Số ký tự chữ tối đa mỗi phần: khung trừ tiền tố dài nhất có thể gắn vào phần đó."""
+    cx = MUC_CAM_XUC.get(muc, MUC_CAM_XUC[MUC_MAC_DINH])
+    if cx.get("tu_dong"):
+        return KHUNG_MAY_DOC - max(len(v["tien_to"]) for v in SAC_THAI.values())
+    return KHUNG_MAY_DOC - len(cx["tien_to"])
+
+
+def ap_toc_wav(ffmpeg, vao, ra, toc):
+    """Đổi tốc độ một phần (giữ cao độ) bằng atempo. toc = 1 thì giữ nguyên file."""
+    if abs(toc - 1.0) < 1e-3 or not ffmpeg:
+        return vao
+    if not os.path.isfile(ra) or os.path.getmtime(ra) < os.path.getmtime(vao):
+        _chay_ffmpeg(ffmpeg, ["-i", vao, "-af", f"atempo={toc:.4f}", "-c:a", "pcm_s16le", ra + ".tmp.wav"], cho=120)
+        os.replace(ra + ".tmp.wav", ra)
+    return ra
+
+
 class DocDaiClone:
-    """Đọc văn bản dài bất kỳ bằng giọng clone. Mỗi phần lưu ngay vào thư mục tạm của việc,
-    chạy lại cùng văn bản và cùng mức thì bỏ qua phần đã có (chạy tiếp khi dừng giữa chừng)."""
+    """Đọc văn bản dài bất kỳ bằng giọng clone.
+
+    - Mỗi phần lưu ngay vào thư mục của việc: chạy lại cùng văn bản thì bỏ qua phần đã có.
+    - Kho câu dùng chung (clone_tam/cau/<slug>): câu đã đọc với cùng chữ, tiền tố, cfg, số bước thì
+      lấy lại, sửa kịch bản chỉ đọc lại câu đổi.
+    - Kiểm whisper chạy song song ở luồng riêng trong lúc GPU sinh câu kế; câu lệch thì đọc lại sau.
+    - moi_phan(i, thong_tin) gọi ngay khi một phần sẵn sàng để app phát luôn từ câu đầu."""
 
     def __init__(self, thu_muc_tam, may_doc=None, kiem=None, ffmpeg="", bao=None, dung=None,
-                 nguong_wer=0.2, so_lan_sinh=3, nguong_giong=None):
+                 nguong_wer=None, so_lan_sinh=3, nguong_giong=None):
         self.thu_muc_tam = os.path.abspath(thu_muc_tam)
-        self.may = may_doc or MayDocVoxCPM()
+        self.may = may_doc or may_doc_chung()
         self.kiem = kiem
         self.ffmpeg = ffmpeg or tim_ffmpeg()
         self.bao = bao or (lambda chu, pt: None)
         self.dung = dung            # threading.Event: đặt thì dừng sau phần đang sinh
-        self.nguong_wer = nguong_wer
+        self.nguong_wer = nguong_wer if nguong_wer is not None else getattr(self.may, "nguong_wer", 0.2)
         self.so_lan_sinh = so_lan_sinh
         # ngưỡng giống giọng từng câu theo thang của máy đọc (máy Nhẹ: cosine dấu giọng OpenVoice)
         self.nguong_giong = nguong_giong if nguong_giong is not None else getattr(self.may, "nguong_giong", 0.85)
 
-    def _sinh_mot(self, chu_doc, ref, ra, muc, sac=None, kiem_ngay=True):
+    def _sinh_mot(self, chu_doc, ref, ra, muc, sac=None, kiem_ngay=True, lan_truoc=0):
         """sac: sắc thái của câu ở mức Tự động. Máy đọc có do_giong thì đo giống giọng từng câu,
         dưới nguong_giong thì sinh lại bằng sắc thái nhẹ (SAC_NHE), giọng mẫu không đổi."""
         do_giong = getattr(self.may, "do_giong", None) if sac else None
@@ -1030,7 +1332,11 @@ class DocDaiClone:
             chu_gui = (cx["tien_to"] + chu_doc) if (cx["tien_to"] and getattr(self.may, "nhan_tien_to", True)) else chu_doc
             tam = ra + f".lan{lan}.wav"
             t0 = time.time()
-            self.may.sinh(chu_gui, ref, tam, cfg=cx["cfg"], muc=sac or muc)
+            if getattr(self.may, "ho_tro_bien_the", False):
+                # đọc lại (lan > 0 hoặc phần đã đọc ở lượt trước, lan_truoc > 0): đổi nhẹ nhịp, cao độ để không ra đúng bản cũ
+                self.may.sinh(chu_gui, ref, tam, cfg=cx["cfg"], muc=sac or muc, bien_the=lan_truoc * self.so_lan_sinh + lan)
+            else:
+                self.may.sinh(chu_gui, ref, tam, cfg=cx["cfg"], muc=sac or muc)
             giay_sinh = time.time() - t0
             x, sr = doc_wav(tam)
             dai = len(cat_lang(x, sr)) / sr
@@ -1187,7 +1493,10 @@ class DocDaiClone:
                 return -10 ** 9
             chu_doc = chu_doc_cua(i)
             cu = so["phan"].get(khoa) or {}
-            kq = self._sinh_mot(chu_doc, ref, wav, muc, p.get("sac"), kiem_ngay=not song_song)
+            lan_doc = so.setdefault("lan_doc", {})            # số lần phần này đã được đọc ra (kể cả lượt trước)
+            kq = self._sinh_mot(chu_doc, ref, wav, muc, p.get("sac"), kiem_ngay=not song_song,
+                                lan_truoc=int(lan_doc.get(khoa, 0)))
+            lan_doc[khoa] = int(lan_doc.get(khoa, 0)) + 1
             kq.update({"chu": p["chu"], "doc": chu_doc, "ngat": p["ngat"], "sac_goc": p.get("sac")})
             for kk in ("lan_kiem", "tot"):
                 if kk in cu:
@@ -1203,11 +1512,15 @@ class DocDaiClone:
                 phat("xong", i=i)
             return 1
 
+    def wav_dung_toc(self, viec, i, rec=None):
+        """Đường wav của phần i để ghép. Tốc độ riêng từng câu chỉ do máy Nhẹ tự xử lý (nhịp Edge), nên là chính file phần."""
+        return os.path.join(viec, f"phan_{i:05d}.wav")
+
     def xuat(self, phan, viec, so, mp3_ra, wav_ra, srt_ra, kieu_shorts, chia_shorts, toc=1.0):
         self.bao("Đang ghép và chuẩn âm lượng...", 96)
         cac, sr = [], None
         for i, p in enumerate(phan):
-            x, sr_i = doc_wav(os.path.join(viec, f"phan_{i:05d}.wav"))
+            x, sr_i = doc_wav(self.wav_dung_toc(viec, i, so["phan"].get(f"{i:05d}")))
             if sr is None:
                 sr = sr_i
             elif sr_i != sr:
@@ -1268,11 +1581,16 @@ def sua_console_utf8(*luong):
             pass
 
 
+dung_utf8_cho_console = sua_console_utf8
+
+
 def main(argv=None):
     """python giong_clone.py <văn bản.txt> <ra.mp3> [--muc "Kể chuyện"] [--tam thư_mục] [--wav]
     [--khong-kiem] [--nhat-ky log.txt]. Chạy lại cùng lệnh thì đọc tiếp phần còn thiếu."""
     import argparse
-    ap = argparse.ArgumentParser()
+    dung_utf8_cho_console()
+    ap = argparse.ArgumentParser(description="Đọc văn bản tiếng Anh dài bằng giọng clone (Arthur), "
+                                             "xuất mp3 + srt, chạy lại cùng lệnh thì đọc tiếp.")
     ap.add_argument("van_ban")
     ap.add_argument("mp3")
     ap.add_argument("--muc", default=MUC_MAC_DINH, choices=list(MUC_CAM_XUC))
@@ -1283,7 +1601,9 @@ def main(argv=None):
     ap.add_argument("--python-kiem", default="")
     ap.add_argument("--nhat-ky", default="")
     ap.add_argument("--studio", default=r"E:\DG Voice Studio")
-    ap.add_argument("--may", default="gpu", choices=["gpu", "nhe"], help="gpu = VoxCPM2 (DG Voice Studio), nhe = Edge + OpenVoice CPU")
+    ap.add_argument("--may", default="gpu", choices=["gpu", "nhe", "tu_dong", "rieng", "chung"],
+                    help="nhe = Edge + OpenVoice trên CPU (mọi máy); gpu = VoxCPM2 qua DG Voice Studio; "
+                         "tu_dong, rieng, chung: chọn máy đọc GPU (daemon chung hay máy đọc riêng)")
     a = ap.parse_args(argv)
     sua_console_utf8()
     with open(a.van_ban, encoding="utf-8") as f:
@@ -1303,12 +1623,17 @@ def main(argv=None):
         kiem = KiemDoc(py, a.tam) if py else None
         bao(f"kiem doc whisper: {'co' if kiem and kiem.co else 'khong'} ({py})", 0)
     t0 = time.time()
+    may = None
     try:
         if a.may == "nhe":
             import may_nhe
             if not may_nhe.da_cai():
                 may_nhe.cai_dat(bao=lambda v, d, t: bao(f"{v} {d / 1e6:.0f}/{t / 1e6:.0f} MB", 0))
             may = may_nhe.MayDocNhe()
+        elif a.may == "tu_dong":
+            may = chon_may_doc(a.studio, os.path.join(a.tam, "log"))
+        elif a.may == "rieng":
+            may = MayDocRieng(a.studio, os.path.join(a.tam, "log"))
         else:
             may = MayDocVoxCPM(a.studio)
         doc = DocDaiClone(a.tam, may, kiem, bao=bao)
@@ -1317,6 +1642,8 @@ def main(argv=None):
     finally:
         if kiem:
             kiem.dong()
+        if isinstance(may, MayDocRieng):
+            may.dong()
     kq.pop("muc_tg", None)
     kq["giay_chay"] = round(time.time() - t0, 1)
     bao("KET QUA " + json.dumps(kq, ensure_ascii=False), 100)
