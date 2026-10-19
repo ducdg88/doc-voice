@@ -769,13 +769,30 @@ print("KQ>" + json.dumps(kq, ensure_ascii=True), flush=True)     # chỉ ASCII: 
 '''
 
 
+def _venv_kiem_tren_may():
+    """Venv kiểm sâu có sẵn trên máy: venv cai-kiem-sau.ps1 tạo (%LOCALAPPDATA%/DocVoice/kiem-sau/venv), rồi venv sâu
+    một tầng ở gốc ổ cố định có faster_whisper, venv có cả resemblyzer đứng trước. Chỉ kiểm thư mục, không chạy python."""
+    import giong_clone as gc
+    ds = []
+    la = os.environ.get("LOCALAPPDATA", "")
+    if la:
+        ds.append(os.path.join(la, "DocVoice", "kiem-sau", "venv", "Scripts", "python.exe"))
+    ds += gc.venv_tren_o(gc.TEN_VENV + (".venv-do",))
+    co_w = [p for p in ds if gc.venv_co_goi(p, "faster_whisper")]
+    return [p for p in co_w if gc.venv_co_goi(p, "resemblyzer")] + [p for p in co_w if not gc.venv_co_goi(p, "resemblyzer")]
+
+
 def tim_python_nang(goi_y=""):
     """Python có faster_whisper (và nếu có thì resemblyzer). Trả (đường python, có_whisper, có_giọng).
-    Thứ tự thử: goi_y, biến DOCVOICE_PYTHON_KIEM, rồi python trên PATH."""
+    Thứ tự thử: goi_y, biến DOCVOICE_PYTHON_KIEM, venv kiểm sâu có sẵn trên máy, rồi python trên PATH."""
     ung_vien = [goi_y] if goi_y else []
     p = os.environ.get("DOCVOICE_PYTHON_KIEM", "").strip()
     if p:
         ung_vien.append(p)
+    try:
+        ung_vien += _venv_kiem_tren_may()
+    except Exception:
+        pass
     for ten in ("python", "py"):
         p = shutil.which(ten)
         if p and "WindowsApps" not in p:
@@ -960,7 +977,7 @@ def html_bao_cao(bc):
         hang = "<tr><td colspan=3>Không phát hiện lỗi.</td></tr>"
     g = bc.get("giong_giong") or {}
     thong = [f"Thời lượng {bc['thong_so']['giay']:.1f} giây"]
-    if g:
+    if g.get("ca_bai") is not None:
         thong.append(f"Giống giọng {g['ca_bai']:.3f}")
     if bc.get("wer") is not None:
         thong.append(f"WER {bc['wer']:.1%}")

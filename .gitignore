@@ -6,6 +6,8 @@ __pycache__/
 giong.json
 cai_dat.json
 tu_dien.txt
+# bộ đệm dịch app tạo khi chạy từ mã
+bo_dem_dich.json
 *.mp3
 *.srt
 

@@ -729,6 +729,8 @@ class LoiClone(RuntimeError):
 # config.json của Studio, biến môi trường, hoặc tự tìm ở gốc các ổ cố định.
 TEN_STUDIO = "DG Voice Studio"
 _STUDIO_DA_DO = []
+_VENV_DA_DO = {}
+TEN_VENV = (".venv", "venv")
 
 
 def _o_dia_co_dinh():
@@ -758,14 +760,70 @@ def thu_muc_studio_mac_dinh():
     return _STUDIO_DA_DO[0]
 
 
-def python_voxcpm(cfg):
-    """Python có VoxCPM: khoá voxcpm_python trong config.json của DG Voice Studio, rồi biến DOCVOICE_VOXCPM_PYTHON."""
-    return str(cfg.get("voxcpm_python") or os.environ.get("DOCVOICE_VOXCPM_PYTHON", "")).strip()
+def venv_co_goi(py, goi):
+    """py là python.exe của một venv có gói goi (thư mục Lib/site-packages/<goi>, chỉ kiểm tồn tại, không chạy python)."""
+    if not py or not os.path.isfile(py):
+        return False
+    goc = os.path.dirname(os.path.dirname(os.path.abspath(py)))
+    return os.path.isdir(os.path.join(goc, "Lib", "site-packages", goi))
+
+
+def venv_tren_o(ten_venv=TEN_VENV):
+    """python.exe của các venv tên ten_venv nằm sâu một tầng ở gốc ổ cố định (<ổ>/<thư mục>/<venv>). Chỉ liệt kê gốc
+    ổ rồi kiểm tồn tại, không đọc sâu hơn; kết quả nhớ cho cả phiên."""
+    k = tuple(ten_venv)
+    if k not in _VENV_DA_DO:
+        thay = []
+        for o in _o_dia_co_dinh():
+            try:
+                ds = sorted(e.path for e in os.scandir(o) if e.is_dir(follow_symlinks=False))
+            except OSError:
+                continue
+            for d in ds:
+                for v in k:
+                    py = os.path.join(d, v, "Scripts", "python.exe")
+                    if os.path.isfile(py):
+                        thay.append(py)
+        _VENV_DA_DO[k] = thay
+    return list(_VENV_DA_DO[k])
+
+
+def _python_trong_lenh_studio(thu_muc_studio):
+    """Đường python mà DG Voice Studio tự ghi ở đầu voice_daemon.py ("<python.exe>" voice_daemon.py)."""
+    try:
+        with open(os.path.join(thu_muc_studio, "voice_daemon.py"), encoding="utf-8", errors="replace") as f:
+            dau = f.read(4000)
+    except OSError:
+        return []
+    return re.findall(r'"([^"\r\n]+?pythonw?\.exe)"\s+voice_daemon\.py', dau, re.I)
+
+
+def python_voxcpm(cfg, thu_muc_studio=""):
+    """Python có VoxCPM: khoá voxcpm_python trong config.json của DG Voice Studio, biến DOCVOICE_VOXCPM_PYTHON, rồi tự
+    tìm: python mà Studio ghi trong lệnh chạy voice_daemon.py, venv trong Studio hay dg_root, venv .venv-voxcpm,
+    .venv, venv sâu một tầng ở gốc ổ cố định. Chỉ nhận venv có gói voxcpm. Đặt tay mà sai đường thì vẫn tự tìm;
+    không tìm ra thì trả đường đặt tay (hoặc "") để báo lỗi rõ."""
+    dat = str(cfg.get("voxcpm_python") or os.environ.get("DOCVOICE_VOXCPM_PYTHON", "")).strip()
+    if dat and os.path.isfile(dat):
+        return dat
+    ung_vien = []
+    if thu_muc_studio:
+        ung_vien += _python_trong_lenh_studio(thu_muc_studio)
+    for goc in (thu_muc_studio, cfg.get("dg_root") or ""):
+        if goc:
+            ung_vien += [os.path.join(goc, v, "Scripts", "python.exe") for v in (".venv-voxcpm",) + TEN_VENV]
+    for py in ung_vien:
+        if venv_co_goi(py, "voxcpm"):
+            return py
+    for py in venv_tren_o((".venv-voxcpm",) + TEN_VENV):      # dò ổ chỉ khi các chỗ trên không có
+        if venv_co_goi(py, "voxcpm"):
+            return py
+    return dat
 
 
 def _loi_thieu_python_voxcpm(py):
-    return LoiClone(f"Không thấy python của VoxCPM ({py or 'chưa đặt'}). Thêm voxcpm_python vào config.json của "
-                    "DG Voice Studio hoặc đặt biến môi trường DOCVOICE_VOXCPM_PYTHON.")
+    return LoiClone(f"Không thấy python của VoxCPM ({py or 'chưa đặt'}, đã tự tìm venv có gói voxcpm ở gốc các ổ). "
+                    "Thêm voxcpm_python vào config.json của DG Voice Studio hoặc đặt biến môi trường DOCVOICE_VOXCPM_PYTHON.")
 
 
 LOI_THIEU_STUDIO = "Chưa thấy thư mục DG Voice Studio: vào Cài đặt chọn thư mục, hoặc đặt biến DOCVOICE_STUDIO."
@@ -825,13 +883,13 @@ class MayDocVoxCPM:
         if not st.get("app"):
             if not self.studio:
                 raise LoiClone(LOI_THIEU_STUDIO)
-            py = python_voxcpm(self._cfg())
+            py = python_voxcpm(self._cfg(), self.studio)
             if not os.path.isfile(py):
                 raise _loi_thieu_python_voxcpm(py)
-            nhat_ky = open(os.path.join(self.studio, "daemon.log"), "a", encoding="utf-8")
-            subprocess.Popen([py, os.path.join(self.studio, "voice_daemon.py")], cwd=self.studio,
-                             stdout=nhat_ky, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                             creationflags=NO_WINDOW)
+            with open(os.path.join(self.studio, "daemon.log"), "a", encoding="utf-8") as nhat_ky:   # tiến trình con giữ bản sao
+                subprocess.Popen([py, os.path.join(self.studio, "voice_daemon.py")], cwd=self.studio,
+                                 stdout=nhat_ky, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 creationflags=NO_WINDOW)
         bat_dau = time.time()
         while time.time() - bat_dau < cho_toi_da:
             st = self.trang_thai()
@@ -932,7 +990,7 @@ class MayDocGPURieng(MayDocVoxCPM):
         with self._khoa:
             if self.tt is not None and self.tt.poll() is None:
                 return self.trang_thai()
-            py = python_voxcpm(self._cfg())
+            py = python_voxcpm(self._cfg(), self.studio)
             if not os.path.isfile(py):
                 raise _loi_thieu_python_voxcpm(py)
             model, cache = self._duong_model()
@@ -1015,7 +1073,7 @@ class MayDocRieng:
             return {}
 
     def python(self):
-        return python_voxcpm(self._cfg())
+        return python_voxcpm(self._cfg(), self.studio)
 
     def goc_model(self):
         goc = self._cfg().get("dg_root") or ""

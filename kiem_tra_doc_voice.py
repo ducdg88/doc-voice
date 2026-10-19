@@ -2629,6 +2629,21 @@ class KiemTraKiemChatLuong(unittest.TestCase):
         self.assertEqual([e for e in bc["loi"] if e["loai"] == "sai_giong"], [])     # không lùi về ngưỡng resemblyzer cũ
         self.assertTrue(any("từng câu" in c for c in bc["chua_kiem"]), bc["chua_kiem"])
 
+    def test_chi_do_giong_tung_cau_khong_co_ca_bai_van_luu_bao_cao(self):
+        """Máy không có resemblyzer: chỉ có số đo từng câu (wespeaker), không có độ giống cả bài. Báo cáo html vẫn
+        ghi được, không sập KeyError 'ca_bai' (nút Kiểm chất lượng trong app đi cùng đường luu_bao_cao)."""
+        import tempfile
+        bc, _ = self._cham_voi_giong_cau({"may": "wespeaker-resnet34", "tung_cau": [[0, 0.85, None], [1, 0.82, None]]},
+                                         giong=None)
+        self.assertNotIn("ca_bai", bc["giong_giong"])
+        self.assertEqual(bc["giong_giong"]["so_cau_do"], 2)
+        h = kcl.html_bao_cao(bc)
+        self.assertNotIn("Giống giọng", h.split("<table")[0])
+        with tempfile.TemporaryDirectory() as t:
+            j, hh = kcl.luu_bao_cao(bc, os.path.join(t, "bai.mp3"))
+            self.assertGreater(os.path.getsize(hh), 0)
+        self.assertEqual(kcl.bang_tong([bc])[0]["giong"], None)
+
     def test_giong_so_voi_bai_bo_chinh_no_ra(self):
         rng = np.random.RandomState(3)
         goc = rng.randn(64)
@@ -3315,6 +3330,94 @@ class KiemTraDuongMayKhongGhiCung(unittest.TestCase):
                 if k not in ("DOCVOICE_STUDIO", "DOCVOICE_VOXCPM_PYTHON", "DOCVOICE_PYTHON_KIEM")}
         sach.update(bien)
         return patch.dict(os.environ, sach, clear=True)
+
+    def setUp(self):
+        # test không dò ổ thật của máy chạy test (máy dev có venv VoxCPM, venv kiểm thật); test dò ổ giả thì bỏ qua
+        if self._testMethodName == "test_python_voxcpm_do_venv_mot_tang_o_goc_o":
+            return
+        p = patch.object(gc, "venv_tren_o", lambda ten_venv=gc.TEN_VENV: [])
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _venv(goc, *goi):
+        """Venv giả: <goc>/Scripts/python.exe và Lib/site-packages/<goi>. Trả đường python."""
+        py = os.path.join(goc, "Scripts", "python.exe")
+        os.makedirs(os.path.dirname(py), exist_ok=True)
+        with open(py, "wb") as f:
+            f.write(b"")
+        for g in goi:
+            os.makedirs(os.path.join(goc, "Lib", "site-packages", g), exist_ok=True)
+        return py
+
+    def test_python_voxcpm_tu_lenh_studio_khi_khong_dat_gi(self):
+        """P1-1 vòng 1: config.json của Studio không có voxcpm_python, không biến: lấy python Studio tự ghi trong lệnh
+        chạy voice_daemon.py (có gói voxcpm), daemon tắt bấm Chuẩn cao thì bật được như 1.6.0 (tới Popen)."""
+        with TemporaryDirectory() as tam:
+            st = os.path.join(tam, gc.TEN_STUDIO)
+            os.makedirs(st)
+            py = self._venv(os.path.join(tam, "bot", ".venv-voxcpm"), "voxcpm")
+            sai = self._venv(os.path.join(tam, "khac", ".venv"))               # không có voxcpm: không nhận
+            with open(os.path.join(st, "voice_daemon.py"), "w", encoding="utf-8") as f:
+                f.write(f'# CHẠY BẰNG PYTHON CỦA VENV VOXCPM:\n#   "{sai}" voice_daemon.py\n#   "{py}" voice_daemon.py\n')
+            with open(os.path.join(st, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"dg_root": tam, "daemon_port": 8796}, f)
+            with self._env():
+                self.assertEqual(gc.python_voxcpm({}, st), py)
+                self.assertEqual(gc.MayDocRieng(st, os.path.join(tam, "log")).python(), py)
+                da_goi = []
+
+                def gia_popen(lenh, **kw):
+                    da_goi.append(lenh[0])
+                    raise RuntimeError("TOI POPEN")
+                vox = gc.MayDocVoxCPM(st)
+                with patch.object(vox, "trang_thai", lambda: {}), patch.object(gc.subprocess, "Popen", gia_popen):
+                    with self.assertRaisesRegex(RuntimeError, "TOI POPEN"):
+                        vox.bat(cho_toi_da=1)
+                self.assertEqual(da_goi, [py])
+            # đặt tay sai đường (ví dụ lệnh setx trỏ venv không có): vẫn tự tìm ra, không báo thiếu
+            with self._env(DOCVOICE_VOXCPM_PYTHON=os.path.join(tam, "khong-co", "python.exe")):
+                self.assertEqual(gc.python_voxcpm({}, st), py)
+
+    def test_python_voxcpm_do_venv_mot_tang_o_goc_o(self):
+        with TemporaryDirectory() as tam:
+            o = os.path.join(tam, "o")
+            py = self._venv(os.path.join(o, "bot", ".venv-voxcpm"), "voxcpm")
+            self._venv(os.path.join(o, "a", "sau", ".venv"), "voxcpm")         # sâu hai tầng: không dò
+            self._venv(os.path.join(o, "b", ".venv"), "torch")
+            dem = []
+
+            def o_dia():
+                dem.append(1)
+                return [o]
+            with self._env(), patch.object(gc, "_o_dia_co_dinh", o_dia), patch.object(gc, "_VENV_DA_DO", {}):
+                self.assertEqual(gc.venv_tren_o((".venv",)), [os.path.join(o, "b", ".venv", "Scripts", "python.exe")])
+                self.assertEqual(gc.python_voxcpm({}, ""), py)
+                self.assertEqual(gc.python_voxcpm({}, ""), py)
+                self.assertEqual(len(dem), 2)                                  # mỗi bộ tên venv dò ổ một lần
+            with self._env(), patch.object(gc, "_o_dia_co_dinh", lambda: [os.path.join(tam, "rong")]), \
+                    patch.object(gc, "_VENV_DA_DO", {}):
+                self.assertEqual(gc.python_voxcpm({}, ""), "")
+
+    def test_python_kiem_chon_venv_co_resemblyzer(self):
+        """P2-1 vòng 1: không biến DOCVOICE_PYTHON_KIEM vẫn tìm venv kiểm sâu có sẵn (có resemblyzer đứng trước),
+        không rơi xuống python trên PATH thiếu resemblyzer."""
+        import types
+        with TemporaryDirectory() as tam:
+            chi_w = self._venv(os.path.join(tam, "a", ".venv"), "faster_whisper")
+            du = self._venv(os.path.join(tam, "b", ".venv-do"), "faster_whisper", "resemblyzer")
+            self._venv(os.path.join(tam, "c", "venv"), "torch")
+            da_thu = []
+
+            def gia_run(lenh, **kw):
+                da_thu.append(lenh[0])
+                return types.SimpleNamespace(stdout="1 1" if lenh[0] == du else "1 0")
+            gia = dict(shutil=types.SimpleNamespace(which=lambda ten: None), subprocess=types.SimpleNamespace(run=gia_run))
+            with self._env(LOCALAPPDATA=os.path.join(tam, "la")), patch.multiple(kcl, **gia), \
+                    patch.object(gc, "venv_tren_o", lambda ten_venv=gc.TEN_VENV: [chi_w, du]):
+                self.assertEqual(kcl._venv_kiem_tren_may(), [du, chi_w])
+                self.assertEqual(kcl.tim_python_nang(), (du, True, True))
+            self.assertEqual(da_thu, [du])
 
     def test_studio_lay_bien_moi_truong_truoc(self):
         with TemporaryDirectory() as tam, self._env(DOCVOICE_STUDIO=tam), \
