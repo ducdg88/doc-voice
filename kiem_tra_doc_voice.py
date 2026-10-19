@@ -2645,6 +2645,7 @@ class KiemTraKiemChatLuong(unittest.TestCase):
                                python="py.exe", thu_muc_tam=t)
             self.assertEqual((da_gui[-1]["ref"], da_gui[-1]["ref_cau"]), ("", ""))
             self.assertTrue(any("dấu giọng" in c for c in ra["chua_kiem"]), ra["chua_kiem"])
+            self.assertFalse(any("resemblyzer" in c for c in ra["chua_kiem"]), ra["chua_kiem"])   # không hai dòng trùng ý
             ra = kcl.kiem_nang(os.path.join(t, "a.mp3"), [[0, 2]], ref="ref.wav", python="py.exe", thu_muc_tam=t)
             self.assertEqual((da_gui[-1]["ref"], da_gui[-1]["ref_cau"]), ("ref.wav", "ref.wav"))
             self.assertFalse(any("dấu giọng" in c for c in ra["chua_kiem"]), ra["chua_kiem"])

@@ -877,7 +877,7 @@ def kiem_nang(duong_am, moc, ref="", python="", model="small", ngon_ngu="en", ng
     ra["loi"] += kq.get("loi", [])
     if ra["giong_cau"] is None:
         ra["chua_kiem"].append("Chưa đo sai giọng từng câu: máy chưa có onnxruntime hoặc chưa tải được mô hình giọng")
-    if ra["giong"] is None:
+    if ra["giong"] is None and not (ref and not am_mau):     # chỉ có dấu giọng thì đã ghi lý do riêng ở trên
         ra["chua_kiem"].append("Chưa đo độ giống giọng: máy chưa có resemblyzer hoặc thiếu mẫu giọng")
     if not co_w:
         ra["chua_kiem"].append("Chưa nhận dạng giọng: máy chưa có faster-whisper")
