@@ -1,4 +1,4 @@
-﻿# Đóng gói Đọc Voice thành dist\DocVoice.exe từ môi trường sạch .venv
+# Đóng gói Đọc Voice thành dist\DocVoice.exe từ môi trường sạch .venv
 # Giọng clone: bản đóng sẵn giong_mau\arthur\ref.wav (chỉ dùng để dựng thử, không phát hành).
 # Bản gửi team: thêm -KhongGiongMau, ra dist\team\DocVoice.exe không kèm giọng; người nhận bấm
 # "Nhập giọng (.dgvoice)" với file Arthur.dgvoice gửi kèm.
@@ -20,6 +20,7 @@ $them = @(
     '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_ref.onnx;may_nhe_onnx",
     '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_doi.onnx;may_nhe_onnx",
     '--add-data', "$PSScriptRoot\may_nhe_onnx\ov_cong_thuc.json;may_nhe_onnx",
+    '--add-data', "$PSScriptRoot\assets;assets",                # Logo và icon ứng dụng
     '--hidden-import', 'kiem_chat_luong',                      # nút Kiểm chất lượng
     '--add-data', "$PSScriptRoot\may_doc_clone.py;."            # máy đọc GPU riêng (chỉ Chuẩn cao)
 )
@@ -39,8 +40,12 @@ if ($KhongGiongMau) {
         $them += @('--add-data', "$PSScriptRoot\giong_nhung\arthur\se.npy;giong_nhung\arthur")
     }
 }
+$iconOpt = @()
+if (Test-Path "$PSScriptRoot\assets\icon.ico") {
+    $iconOpt = @('--icon', "$PSScriptRoot\assets\icon.ico")
+}
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name DocVoice `
-    --distpath $ra --workpath build --specpath build @them doc_voice.py
+    --distpath $ra --workpath build --specpath build @iconOpt @them doc_voice.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller lỗi ($LASTEXITCODE), exe chưa được dựng lại" }
 # file DOCVOICE_THU / DOCGIONG_THU cạnh exe bật chế độ thử (máy chủ giả); bản phát cho team không được kèm.
 foreach ($t in 'DOCVOICE_THU', 'DOCGIONG_THU') {

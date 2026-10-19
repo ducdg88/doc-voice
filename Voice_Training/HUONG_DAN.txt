@@ -1,0 +1,27 @@
+THU MUC VOICE TRAINING - DOC VOICE
+
+1. Muc dich:
+Luu tru va quan ly cac giong noi da train, giong clone, hoac mau audio de su dung trong Doc Voice.
+
+2. Cach them giong moi:
+Cach 1 (Khuyen dung - Truc tiep tren giao dien app):
+- Mo Doc Voice
+- Bam nut "+ Nap Voice"
+- Chon file am thanh bat ky (.wav, .mp3, .m4a, .flac, .ogg) hoac goi giong (.dgvoice)
+- Nhap ten hien thi cho giong
+- App se tu dong chuyen doi audio sang chuan PCM 16-bit mono 24 kHz, tao file voice.json va dau giong se.npy (neu co the), dong thoi nap ngay vao danh sach de doc.
+
+Cach 2 (Thu cong bang thu muc):
+- Tao mot thu muc con trong Voice_Training, vi du: Voice_Training\my-voice\
+- Chep file am thanh mau vao va dat ten la ref.wav (thoi luong khuyen dung 5 - 30 giay, giong noi ro rang, khong nhac nen).
+- (Tuy chon) Tao file voice.json voi noi dung vi du:
+{
+  "slug": "my-voice",
+  "ten": "Giong Cua Toi",
+  "locale": "en-US",
+  "mo_ta": "Giong clone do toi train"
+}
+- Mo Doc Voice hoac bam nut "Lam moi", giong se tu dong hien thi trong danh sach giong clone.
+
+3. Dong bo voi DG Voice Studio:
+Doc Voice tu dong quet va nhan dien tat ca cac giong ma ban da train ben DG Voice Studio (o thu muc DG Voice Studio\voices\). Ban khong can copy thu cong, cac giong do se co san trong danh sach voi nguon Studio.

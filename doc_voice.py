@@ -124,11 +124,12 @@ if getattr(sys, "frozen", False):  # bản exe gửi người khác: dữ liệu
             shutil.copytree(goc_cu, GOC)
         except Exception:
             pass
-    THU_MUC_RA = os.path.join(thu_muc_documents(), "Doc Voice")
+    THU_MUC_RA = os.path.join(GOC, "ket_qua")
 else:
     GOC = os.path.dirname(os.path.abspath(__file__))
-    THU_MUC_RA = os.path.join(GOC, "da_chuyen")
+    THU_MUC_RA = os.path.join(GOC, "ket_qua")
 os.makedirs(GOC, exist_ok=True)
+os.makedirs(THU_MUC_RA, exist_ok=True)
 FILE_GIONG = os.path.join(GOC, "giong.json")
 FILE_CAI_DAT = os.path.join(GOC, "cai_dat.json")
 DO_DAI_DOAN = 2500  # ký tự mỗi lượt gửi máy chủ
@@ -1585,12 +1586,17 @@ class App(tk.Tk):
         self._tien = {}                    # tiến độ lượt đang đọc: chu, pt, t_doi, t_cong_viec
         self._nhat_ky_tien_do = None
         self._hen_nhip = None
-        self.thu_muc_ra = (self.cd.get("thu_muc_ra") or "").strip() or THU_MUC_RA      # rỗng hoặc thiếu thì dùng mặc định
+        tm_luu = (self.cd.get("thu_muc_ra") or "").strip()
+        if not tm_luu or "Documents" in tm_luu:  # Khong luu o Documents
+            tm_luu = THU_MUC_RA
+        self.thu_muc_ra = tm_luu
         try:
             os.makedirs(self.thu_muc_ra, exist_ok=True)
         except OSError:
             self.thu_muc_ra = THU_MUC_RA
             os.makedirs(self.thu_muc_ra, exist_ok=True)
+        self.var_thu_muc_ra = tk.StringVar(value=self.thu_muc_ra)
+        self._nap_icon_app()
         self._nguoi_dung_da_chon = False   # đã tự đổi ngôn ngữ hoặc giọng trong phiên này
         self._dung_giao_dien()
         self._nap_ngon_ngu()               # giọng clone không cần danh sách Edge, chọn được ngay
@@ -1614,6 +1620,26 @@ class App(tk.Tk):
         else:
             self.after(300, lambda: self.state("zoomed"))  # vừa vùng làm việc, không lấn taskbar
 
+    def _nap_icon_app(self):
+        """Nạp logo và icon chuyên nghiệp cho app."""
+        self._logo_img = None
+        self._logo_title = None
+        assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+        ico_path = os.path.join(assets_dir, "icon.ico")
+        if os.path.isfile(ico_path):
+            try:
+                self.iconbitmap(ico_path)
+            except Exception:
+                pass
+        logo_png = os.path.join(assets_dir, "logo_32.png")
+        if os.path.isfile(logo_png):
+            try:
+                self._logo_img = tk.PhotoImage(file=logo_png)
+                self.iconphoto(True, self._logo_img)
+                self._logo_title = self._logo_img
+            except Exception:
+                pass
+
     def _dung_giao_dien(self):
         s = ttk.Style(self)
         s.theme_use("clam")
@@ -1627,8 +1653,12 @@ class App(tk.Tk):
         khung = ttk.Frame(self, padding=16)
         khung.pack(fill="both", expand=True)
 
-        ttk.Label(khung, text="Chuyển văn bản thành giọng nói (Đọc Voice)", style="Tieu.TLabel").pack(anchor="w")
-        ttk.Label(khung, text="Giọng Microsoft Edge Neural và giọng clone trên máy (Arthur), 2 bảng song song tiếng Anh và bản dịch, highlight theo tiến trình đọc.",
+        hang_tieu_de = ttk.Frame(khung)
+        hang_tieu_de.pack(fill="x", pady=(0, 2))
+        if getattr(self, "_logo_title", None):
+            ttk.Label(hang_tieu_de, image=self._logo_title).pack(side="left", padx=(0, 8))
+        ttk.Label(hang_tieu_de, text="Chuyển văn bản thành giọng nói (Đọc Voice)", style="Tieu.TLabel").pack(side="left")
+        ttk.Label(khung, text="Giọng Microsoft Edge Neural và giọng clone trên máy (Arthur, Voice Training), 2 bảng song song tiếng Anh và bản dịch, highlight theo tiến trình đọc.",
                   foreground="#6b7280").pack(anchor="w", pady=(0, 10))
 
         hang1 = ttk.Frame(khung)
@@ -1665,7 +1695,9 @@ class App(tk.Tk):
         self.may_doc.pack(side="left", padx=6)
         self.may_doc.bind("<<ComboboxSelected>>", lambda e: (self._cap_nhat_nhan_giong(), self._lam_nong(), self._luu_cai_dat()))
         ttk.Button(hang_cl, text="★ Giọng Arthur", command=self._chon_arthur).pack(side="left", padx=(6, 0))
-        ttk.Button(hang_cl, text="Nhập giọng (.dgvoice)", command=self._nhap_giong).pack(side="left", padx=(6, 0))
+        ttk.Button(hang_cl, text="📁 Thư mục Voice Training", command=self._mo_thu_muc_training).pack(side="left", padx=(6, 0))
+        ttk.Button(hang_cl, text="➕ Nạp Voice", command=self._nap_voice_audio_hoac_goi).pack(side="left", padx=(6, 0))
+        ttk.Button(hang_cl, text="🔄 Làm mới", command=self._lam_moi_danh_sach_giong).pack(side="left", padx=(6, 0))
         ttk.Button(hang_cl, text="Xuất giọng", command=self._xuat_giong).pack(side="left", padx=(6, 0))
         ttk.Button(hang_cl, text="▶ Đọc kịch bản YouTube", style="Xanh.TButton",
                    command=self._doc_kich_ban_youtube).pack(side="left", padx=(12, 0))
@@ -1689,6 +1721,14 @@ class App(tk.Tk):
         hang2.columnconfigure(1, weight=1)
         ttk.Button(hang2, text="Mặc định", command=self._mac_dinh).grid(row=1, column=2, padx=(12, 0))
         self._cap_nhat_nhan()
+
+        # Thanh hiển thị thư mục kết quả
+        hang_kq = ttk.Frame(khung)
+        hang_kq.pack(side="bottom", fill="x", pady=(4, 6))
+        ttk.Label(hang_kq, text="📁 Thư mục kết quả:", font=("Segoe UI Semibold", 9)).pack(side="left")
+        ttk.Entry(hang_kq, textvariable=self.var_thu_muc_ra, state="readonly").pack(side="left", fill="x", expand=True, padx=(6, 6))
+        ttk.Button(hang_kq, text="Đổi thư mục...", command=self._doi_thu_muc_ra).pack(side="left", padx=(0, 6))
+        ttk.Button(hang_kq, text="📂 Mở thư mục kết quả", command=lambda: os.startfile(self.thu_muc_ra)).pack(side="left")
 
         self.nhan_giong = ttk.Label(khung, font=("Segoe UI Semibold", 10))
         self.nhan_giong.pack(side="bottom", anchor="w", pady=(4, 0))
@@ -2842,6 +2882,8 @@ class App(tk.Tk):
                     self.after(0, self._bao, f"Đã xuất sẵn: {duong_ra}", 100)
             else:
                 self.after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}", 100)
+                if not nghe_thu:
+                    self.after(0, lambda: self._thong_bao_ket_qua(duong_ra))
             if not self._tu_dong and not luong:
                 self.after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))
             ket = {"ok": True, "mp3": duong_ra, "srt": kq.get("srt"), "giay": kq.get("giay"),
@@ -2924,6 +2966,105 @@ class App(tk.Tk):
             self.nhan_may.config(text=chu)
         except Exception:
             pass
+
+    def _doi_thu_muc_ra(self):
+        """Đổi thư mục lưu kết quả xuất MP3 và phụ đề."""
+        p = filedialog.askdirectory(initialdir=self.thu_muc_ra, title="Chọn thư mục lưu kết quả")
+        if p:
+            p_chuan = os.path.abspath(p)
+            self.thu_muc_ra = p_chuan
+            self.var_thu_muc_ra.set(p_chuan)
+            self.cd["thu_muc_ra"] = p_chuan
+            self._luu_cai_dat()
+            self.trang_thai.set(f"Đã đổi thư mục kết quả thành: {p_chuan}")
+
+    def _mo_thu_muc_training(self):
+        """Mở thư mục Voice Training để người dùng xem và quản lý các giọng."""
+        os.makedirs(gc.THU_MUC_TRAINING, exist_ok=True)
+        try:
+            os.startfile(gc.THU_MUC_TRAINING)
+        except Exception as e:
+            messagebox.showerror("Đọc Voice", f"Không mở được thư mục Voice Training:\n{e}")
+
+    def _nap_voice_audio_hoac_goi(self):
+        """Nạp file âm thanh (.wav, .mp3, .m4a, .flac, .ogg...) hoặc gói .dgvoice vào Voice Training."""
+        p = filedialog.askopenfilename(
+            title="Chọn file âm thanh mẫu hoặc gói giọng",
+            filetypes=[
+                ("Tất cả định dạng hỗ trợ", "*.wav;*.mp3;*.m4a;*.flac;*.ogg;*.dgvoice"),
+                ("File âm thanh", "*.wav;*.mp3;*.m4a;*.flac;*.ogg"),
+                ("Gói giọng Đọc Voice", "*.dgvoice"),
+                ("Tất cả các file", "*.*")
+            ]
+        )
+        if not p:
+            return
+        if p.lower().endswith(".dgvoice"):
+            return self._nhap_giong(p)
+
+        from tkinter import simpledialog
+        ten_mac_dinh = os.path.splitext(os.path.basename(p))[0].replace("-", " ").replace("_", " ").title()
+        ten_giong = simpledialog.askstring("Nạp Voice Training", "Nhập tên hiển thị cho giọng mới:",
+                                          initialvalue=ten_mac_dinh, parent=self)
+        if not ten_giong:
+            return
+        try:
+            meta = gc.nap_file_am_thanh(p, ten_giong=ten_giong.strip())
+            self._nap_ngon_ngu()
+            slug_clone = gc.TIEN_TO_CLONE + meta["slug"]
+            self.cd["giong"] = slug_clone
+            self.cd["ngon_ngu"] = MA_CLONE
+            if getattr(self, "_locales", None) and MA_CLONE in self._locales:
+                self.ngon_ngu.current(self._locales.index(MA_CLONE))
+                self._nap_giong()
+                if slug_clone in self._ds_giong:
+                    self.chon_giong.current(self._ds_giong.index(slug_clone))
+                    self._cap_nhat_nhan_giong()
+            self._luu_cai_dat()
+            msg = (f"Đã nạp thành công giọng mới vào Voice Training!\n\n"
+                   f"• Tên giọng: {meta['ten']}\n"
+                   f"• Mã giọng: {meta['slug']}\n"
+                   f"• Thư mục lưu: {os.path.join(gc.THU_MUC_TRAINING, meta['slug'])}\n\n"
+                   f"Giọng đã được nạp vào danh sách và chọn sẵn sàng để đọc!")
+            messagebox.showinfo("Nạp Voice Thành Công", msg)
+            self.trang_thai.set(f"Đã nạp Voice Training: {meta['ten']}")
+        except Exception as e:
+            messagebox.showerror("Lỗi Nạp Voice", f"Không nạp được giọng từ file âm thanh:\n{e}")
+
+    def _lam_moi_danh_sach_giong(self):
+        """Quét lại toàn bộ thư mục Voice Training và DG Voice Studio, cập nhật danh sách hiển thị."""
+        self._nap_ngon_ngu()
+        if self._la_clone():
+            self._nap_giong()
+        self.trang_thai.set("Đã làm mới danh sách giọng từ Voice Training và DG Voice Studio!")
+        messagebox.showinfo("Làm mới danh sách", "Đã quét và cập nhật lại toàn bộ danh sách giọng mới nhất từ Voice Training và Studio!")
+
+    def _thong_bao_ket_qua(self, duong_ra):
+        """Thông báo kết quả chuyển đổi và hỏi mở thư mục chứa kết quả."""
+        if self._tu_dong or getattr(self, "_dang_nghe_thu", False):
+            return
+        ten_goc = os.path.splitext(duong_ra)[0]
+        ds_file = [f"• Audio: {os.path.basename(duong_ra)}"]
+        srt_file = ten_goc + ".srt"
+        if os.path.isfile(srt_file):
+            ds_file.append(f"• Phụ đề: {os.path.basename(srt_file)}")
+        vi_srt = ten_goc + "_vi.srt"
+        if os.path.isfile(vi_srt):
+            ds_file.append(f"• Phụ đề tiếng Việt: {os.path.basename(vi_srt)}")
+        chap_file = ten_goc + "_chapters.txt"
+        if os.path.isfile(chap_file):
+            ds_file.append(f"• Chapters YouTube: {os.path.basename(chap_file)}")
+
+        msg = ("ĐÃ CHUYỂN ĐỔI GIỌNG NÓI HOÀN TẤT!\n\n"
+               f"📁 Thư mục kết quả:\n{self.thu_muc_ra}\n\n"
+               "Các file đã tạo:\n" + "\n".join(ds_file) + "\n\n"
+               "Bạn có muốn mở thư mục kết quả ngay bây giờ không?")
+        tra_loi = messagebox.askyesno("Kết quả Đọc Voice", msg)
+        if tra_loi:
+            try:
+                os.startfile(self.thu_muc_ra)
+            except Exception:
+                pass
 
     def _nhap_giong(self, duong=None):
         p = duong or filedialog.askopenfilename(title="Chọn gói giọng", filetypes=[("Gói giọng Đọc Voice", "*.dgvoice")])
@@ -3141,6 +3282,8 @@ class App(tk.Tk):
             if canh_bao_vi:
                 ghi_chu += f". {canh_bao_vi[0]}"
             self.after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}{ghi_chu}", 100)
+            if not nghe_thu:
+                self.after(0, lambda: self._thong_bao_ket_qua(duong_ra))
             self._ket_qua_luot = {"ok": True, "mp3": duong_ra, "so_cau": len(cau_list)}
             if not self._tu_dong or self._tu_dong.get("phat_sau"):
                 self.after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))

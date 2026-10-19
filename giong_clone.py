@@ -591,8 +591,19 @@ def thu_muc_goc_app():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-# Thư mục giọng người dùng nhập (app đặt lại = %APPDATA%\\DocVoice\\giong_clone khi chạy exe)
-THU_MUC_GIONG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "giong_clone_nguoi_dung")
+def la_kiem_thu():
+    return bool(os.environ.get("DOCVOICE_THU") or os.environ.get("DOCGIONG_THU") or "unittest" in sys.modules)
+
+
+# Thư mục Voice Training trong dự án (lưu các giọng đã train và nạp)
+THU_MUC_TRAINING = os.path.join(thu_muc_goc_app(), "Voice_Training")
+try:
+    os.makedirs(THU_MUC_TRAINING, exist_ok=True)
+except Exception:
+    pass
+
+# Thư mục giọng người dùng nhập (mặc định trỏ vào Voice_Training)
+THU_MUC_GIONG = THU_MUC_TRAINING
 DUOI_GOI = ".dgvoice"
 GOI_TOI_DA = 30 * 1024 * 1024          # gói giọng tối đa 30 MB
 _TEN_TRONG_GOI = {"voice.json", "ref.wav", "ref.txt"}
@@ -608,8 +619,15 @@ def safe_slug(slug):
 
 
 def duong_se_dong_goi(slug):
-    """Dấu giọng (embedding OpenVoice, 256 số, 1 KB) đóng sẵn trong app, không kèm âm thanh mẫu."""
-    return os.path.join(thu_muc_goc_app(), "giong_nhung", safe_slug(slug), "se.npy")
+    """Dấu giọng (embedding OpenVoice, 256 số, 1 KB) đóng sẵn trong app hoặc trong thư mục người dùng nhập."""
+    s = safe_slug(slug)
+    se_tr = os.path.join(_thu_muc_giong(s), "se.npy")
+    if os.path.isfile(se_tr):
+        return se_tr
+    se_nhung = os.path.join(thu_muc_goc_app(), "giong_nhung", s, "se.npy")
+    if os.path.isfile(se_nhung):
+        return se_nhung
+    return se_nhung
 
 
 def la_dau_giong(duong):
@@ -618,30 +636,144 @@ def la_dau_giong(duong):
 
 
 def duong_mau(slug):
-    """Mẫu giọng: ưu tiên giọng người dùng nhập, rồi mẫu .wav đóng sẵn (bản có kèm mẫu),
-    rồi dấu giọng .npy đóng sẵn (bản gửi người ngoài)."""
-    rieng = os.path.join(_thu_muc_giong(slug), "ref.wav")
+    """Mẫu giọng: ưu tiên giọng người dùng nhập, rồi DG Voice Studio (khi không chạy thử),
+    rồi giong_mau đóng sẵn, rồi dấu giọng se.npy."""
+    s = safe_slug(slug)
+    rieng = os.path.join(_thu_muc_giong(s), "ref.wav")
     if os.path.isfile(rieng):
         return rieng
-    dong_goi = os.path.join(thu_muc_goc_app(), "giong_mau", slug, "ref.wav")
+    if not la_kiem_thu():
+        st = thu_muc_studio_mac_dinh()
+        if st:
+            st_ref = os.path.join(st, "voices", s, "ref.wav")
+            if os.path.isfile(st_ref):
+                return st_ref
+    dong_goi = os.path.join(thu_muc_goc_app(), "giong_mau", s, "ref.wav")
     if os.path.isfile(dong_goi):
         return dong_goi
-    se = duong_se_dong_goi(slug)
+    se = duong_se_dong_goi(s)
     return se if os.path.isfile(se) else dong_goi
 
 
 def ds_giong():
-    """{slug: thông tin} gồm giọng đóng sẵn (mẫu .wav hoặc dấu giọng .npy) và giọng người dùng đã nhập."""
+    """{slug: thông tin} gồm:
+    1. Giọng đóng sẵn (mẫu .wav hoặc dấu giọng .npy như Arthur)
+    2. Giọng trong thư mục người dùng nhập (Voice_Training)
+    3. Giọng từ DG Voice Studio (khi không chạy kiểm thử)"""
     ds = {}
+    # 1. Giọng đóng sẵn
     for slug, tt in GIONG_CLONE.items():
-        if os.path.isfile(os.path.join(thu_muc_goc_app(), "giong_mau", slug, "ref.wav")) or                 os.path.isfile(duong_se_dong_goi(slug)):
+        if os.path.isfile(os.path.join(thu_muc_goc_app(), "giong_mau", slug, "ref.wav")) or \
+           os.path.isfile(duong_se_dong_goi(slug)):
             ds[slug] = dict(tt, nguon="đóng sẵn")
+
+    # 2. Quét thư mục người dùng nhập (THU_MUC_GIONG)
     if os.path.isdir(THU_MUC_GIONG):
         for slug in sorted(os.listdir(THU_MUC_GIONG)):
-            tt = _doc(os.path.join(THU_MUC_GIONG, slug, "voice.json"), None)
-            if tt and os.path.isfile(os.path.join(THU_MUC_GIONG, slug, "ref.wav")):
+            tm = os.path.join(THU_MUC_GIONG, slug)
+            if not os.path.isdir(tm):
+                continue
+            ref_wav = os.path.join(tm, "ref.wav")
+            if not os.path.isfile(ref_wav):
+                for f in os.listdir(tm):
+                    if f.lower().endswith((".wav", ".mp3", ".m4a", ".flac", ".ogg")):
+                        ref_wav = os.path.join(tm, f)
+                        break
+            if os.path.isfile(ref_wav) or os.path.isfile(os.path.join(tm, "se.npy")):
+                tt = _doc(os.path.join(tm, "voice.json"), None)
+                if not tt:
+                    ten_hien = slug.replace("-", " ").replace("_", " ").title()
+                    tt = {"ten": ten_hien, "slug": slug, "locale": "en-US", "mo_ta": "Voice Training"}
                 ds[slug] = dict(tt, nguon="đã nhập")
+
+    # 3. Quét thư mục voices của DG Voice Studio (chỉ khi không chạy kiểm thử)
+    if not la_kiem_thu():
+        st = thu_muc_studio_mac_dinh()
+        if st and os.path.isdir(os.path.join(st, "voices")):
+            tm_st = os.path.join(st, "voices")
+            for slug in sorted(os.listdir(tm_st)):
+                if slug in ds:
+                    continue
+                tm = os.path.join(tm_st, slug)
+                if os.path.isdir(tm) and os.path.isfile(os.path.join(tm, "ref.wav")):
+                    tt = _doc(os.path.join(tm, "voice.json"), None) or {}
+                    ten_hien = tt.get("name") or slug.replace("-", " ").replace("_", " ").title()
+                    ds[slug] = {
+                        "ten": ten_hien,
+                        "slug": slug,
+                        "gioi": tt.get("gender", ""),
+                        "locale": tt.get("locale", "en-US"),
+                        "mo_ta": tt.get("note") or "Giọng Studio",
+                        "quyen_dung": "DG Voice Studio",
+                        "nguon": "Studio"
+                    }
     return ds
+
+
+def nap_file_am_thanh(duong_am_thanh, ten_giong="", mo_ta="", locale="en-US"):
+    """Nạp file âm thanh (.wav, .mp3, .m4a, .flac, .ogg...) vào kho giọng người dùng.
+    Chuẩn hoá thành ref.wav PCM 16-bit mono 24 kHz, tự tạo voice.json và dấu giọng se.npy."""
+    if not os.path.isfile(duong_am_thanh):
+        raise LoiClone(f"Không tìm thấy file: {duong_am_thanh}")
+    ten_goc = os.path.splitext(os.path.basename(duong_am_thanh))[0]
+    slug = safe_slug(ten_giong or ten_goc)
+    if not slug:
+        slug = "voice-" + hashlib.md5(duong_am_thanh.encode()).hexdigest()[:6]
+    dich = _thu_muc_giong(slug)
+    os.makedirs(dich, exist_ok=True)
+    dich_wav = os.path.join(dich, "ref.wav")
+
+    # Dùng ffmpeg chuẩn hoá sang WAV PCM 16-bit mono 24 kHz
+    cmd = ["ffmpeg", "-y", "-i", duong_am_thanh, "-vn", "-acodec", "pcm_s16le",
+           "-ar", "24000", "-ac", "1", dich_wav]
+    try:
+        sp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            creationflags=NO_WINDOW)
+        if sp.returncode != 0 or not os.path.isfile(dich_wav):
+            # Nếu ffmpeg lỗi mà file đã là wav thì thử copy trực tiếp
+            if duong_am_thanh.lower().endswith(".wav"):
+                shutil.copyfile(duong_am_thanh, dich_wav)
+            else:
+                raise LoiClone("Không chuyển đổi được file âm thanh bằng ffmpeg.")
+    except FileNotFoundError:
+        if duong_am_thanh.lower().endswith(".wav"):
+            shutil.copyfile(duong_am_thanh, dich_wav)
+        else:
+            raise LoiClone("Cần có ffmpeg trong hệ thống để nạp file âm thanh định dạng này.")
+
+    # Kiểm tra thời lượng
+    try:
+        x, sr = doc_wav(dich_wav)
+        giay = len(x) / sr
+    except Exception:
+        giay = 0.0
+
+    meta = {
+        "slug": slug,
+        "ten": str(ten_giong or ten_goc)[:60],
+        "gioi": "",
+        "locale": locale or "en-US",
+        "mo_ta": mo_ta or f"Mẫu âm thanh nạp vào Voice Training ({giay:.1f}s)",
+        "quyen_dung": "Mẫu âm thanh người dùng nạp",
+        "nguon": "Voice Training",
+        "thoi_luong_giay": round(giay, 1)
+    }
+    with open(os.path.join(dich, "voice.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    # Thử tự động tạo dấu giọng se.npy để máy Nhẹ ONNX dùng được ngay
+    try:
+        import may_nhe as mn
+        m = mn.MayDocNhe()
+        m.bat()
+        g = np.asarray(m.se_dich(dich_wav), dtype=np.float32)
+        if g.shape == (1, 256, 1) and np.isfinite(g).all():
+            np.save(os.path.join(dich, "se.npy"), g)
+    except Exception:
+        pass
+
+    return meta
+
 
 
 def xuat_goi_giong(slug, duong_ra, quyen_dung=""):
