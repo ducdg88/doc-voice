@@ -638,7 +638,28 @@ def giong_so_voi_bai(E, them=None):
 '''
 exec(_MA_GIONG_CAU)
 
-_MA_NANG = _MA_GIONG_CAU + r'''
+# Giữ giống hệt giong_clone._MA_DOC_TRUOC (test KiemTraKiemDocKhongTreo so hai bản).
+_MA_DOC_TRUOC = r'''
+def doc_truoc_model(ten):
+    """Đọc trước model.bin bằng khối 16 MB cho file vào bộ đệm hệ điều hành, rồi mới nạp. ctranslate2 tự đọc theo
+    khối nhỏ: trên ổ HDD đang bận, mỗi khối phải xếp hàng nên chỉ còn khoảng 0,1 MB/s (model small 483 MB mất
+    cả giờ, NV-1299); khối lớn trên cùng ổ vẫn khoảng 44 MB/s. Chưa có model trong bộ nhớ đệm thì bỏ qua (sẽ tải)."""
+    try:
+        import os
+        if os.path.isdir(ten):
+            thu_muc = ten
+        else:
+            from faster_whisper.utils import download_model
+            thu_muc = download_model(ten, local_files_only=True)
+        buf = bytearray(16 << 20)
+        with open(os.path.join(thu_muc, "model.bin"), "rb", buffering=0) as f:
+            while f.readinto(buf):
+                pass
+    except Exception:
+        pass
+'''
+
+_MA_NANG = _MA_GIONG_CAU + _MA_DOC_TRUOC + r'''
 import json, subprocess, sys, os, hashlib
 cfg = json.load(open(sys.argv[1], encoding="utf-8"))
 NW = 0x08000000
@@ -653,7 +674,12 @@ am = doc(cfg["am"])
 if cfg.get("whisper"):
     try:
         from faster_whisper import WhisperModel
-        m = WhisperModel(cfg.get("model", "small"), device="cpu", compute_type="int8", cpu_threads=4)
+        doc_truoc_model(cfg.get("model", "small"))
+        try:   # bộ nhớ đệm trước, không gọi mạng (máy không mạng hay proxy chết vẫn nạp được)
+            m = WhisperModel(cfg.get("model", "small"), device="cpu", compute_type="int8", cpu_threads=4,
+                             local_files_only=True)
+        except Exception:
+            m = WhisperModel(cfg.get("model", "small"), device="cpu", compute_type="int8", cpu_threads=4)
         for i, (bd, kt) in enumerate(cfg["moc"]):
             if str(i) in cfg.get("bo_qua", []):
                 continue

@@ -1128,10 +1128,37 @@ def dong_tat_ca_may():
 
 
 # ---------------------------------------------------------------- kiểm đọc bằng whisper local
+# Giữ giống hệt kiem_chat_luong._MA_DOC_TRUOC (test KiemTraKiemDocKhongTreo so hai bản).
+_MA_DOC_TRUOC = r'''
+def doc_truoc_model(ten):
+    """Đọc trước model.bin bằng khối 16 MB cho file vào bộ đệm hệ điều hành, rồi mới nạp. ctranslate2 tự đọc theo
+    khối nhỏ: trên ổ HDD đang bận, mỗi khối phải xếp hàng nên chỉ còn khoảng 0,1 MB/s (model small 483 MB mất
+    cả giờ, NV-1299); khối lớn trên cùng ổ vẫn khoảng 44 MB/s. Chưa có model trong bộ nhớ đệm thì bỏ qua (sẽ tải)."""
+    try:
+        import os
+        if os.path.isdir(ten):
+            thu_muc = ten
+        else:
+            from faster_whisper.utils import download_model
+            thu_muc = download_model(ten, local_files_only=True)
+        buf = bytearray(16 << 20)
+        with open(os.path.join(thu_muc, "model.bin"), "rb", buffering=0) as f:
+            while f.readinto(buf):
+                pass
+    except Exception:
+        pass
+'''
+
 _MA_KIEM = r'''
 import sys, json
 from faster_whisper import WhisperModel
-m = WhisperModel(sys.argv[1], device="cpu", compute_type="int8", cpu_threads=3)
+''' + _MA_DOC_TRUOC + r'''
+doc_truoc_model(sys.argv[1])
+try:   # có sẵn trong bộ nhớ đệm thì nạp thẳng, không gọi mạng (máy không mạng hay proxy chết vẫn nạp được)
+    m = WhisperModel(sys.argv[1], device="cpu", compute_type="int8", cpu_threads=3, local_files_only=True)
+except Exception:
+    print(json.dumps({"dang_tai": True}), flush=True)
+    m = WhisperModel(sys.argv[1], device="cpu", compute_type="int8", cpu_threads=3)
 print(json.dumps({"san_sang": True}), flush=True)
 for dong in sys.stdin:
     try:
@@ -1162,8 +1189,20 @@ def tim_python_whisper(goi_y=""):
     return ""
 
 
+def _doc_dong_co_han(f, cho):
+    """Đọc một dòng từ ống của tiến trình con, quá cho giây thì trả chuỗi rỗng (không treo app)."""
+    kq = []
+    t = threading.Thread(target=lambda: kq.append(f.readline()), daemon=True)
+    t.start()
+    t.join(cho)
+    return kq[0] if kq else ""
+
+
 class KiemDoc:
-    """Tiến trình whisper (CPU) chạy nền, nhận đường wav, trả chữ nghe được."""
+    """Tiến trình whisper (CPU) chạy nền, nhận đường wav, trả chữ nghe được.
+    Nạp model quá CHO_NAP giây (hoặc tải lần đầu quá CHO_TAI giây) thì bỏ kiểm, việc đọc vẫn chạy tiếp."""
+    CHO_NAP = 180
+    CHO_TAI = 1200
 
     def __init__(self, python, thu_muc, model="small"):
         self.p = None
@@ -1175,8 +1214,10 @@ class KiemDoc:
         self.p = subprocess.Popen([python, ma, model], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
                                   creationflags=NO_WINDOW | UU_TIEN_THAP)
-        dau = self.p.stdout.readline()
-        if "san_sang" not in dau:
+        dau = _doc_dong_co_han(self.p.stdout, self.CHO_NAP)
+        if "dang_tai" in dau:                     # lần đầu: tải model nghe lại, cho thêm thời gian
+            dau = _doc_dong_co_han(self.p.stdout, self.CHO_TAI)
+        if "san_sang" not in dau:                 # treo hay lỗi: bỏ kiểm whisper, vẫn đọc tiếp
             self.dong()
 
     @property

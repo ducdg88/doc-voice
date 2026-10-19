@@ -1,9 +1,12 @@
+import gc as _gc
 import json
 import os
 import re
 import shutil
 import subprocess
+import tkinter
 import unittest
+import weakref
 from io import BytesIO
 from pathlib import Path
 from shutil import which
@@ -16,6 +19,39 @@ import numpy as np
 import doc_voice
 import giong_clone as gc
 import kiem_chat_luong as kcl
+
+_TCL_DA_MO = []     # bộ thông dịch Tcl của mọi App test đã mở, giữ tới khi tiến trình thoát
+
+
+def mo_app_an(test):
+    """Mở App ẩn cho một test, đóng khi test xong. Mọi App trong file này phải mở qua đây.
+
+    App Tk là rác vòng (widget, biến Tk trỏ ngược về App) nên chỉ bộ gom rác vòng dọn được, và nó chạy ở luồng
+    nào đang cấp phát. Chạy ở luồng phụ (DocDaiClone, luồng _lam_nong nạp máy đọc Nhẹ khi chọn Arthur trên máy đã
+    cài) thì bộ thông dịch Tcl bị huỷ sai luồng và cả tiến trình chết: "Tcl_AsyncDelete: async handler deleted by
+    the wrong thread". Nên giữ bộ thông dịch tới khi tiến trình thoát (huỷ ở luồng chính), không nạp máy đọc thật
+    ở luồng nền trong test, đóng App rồi gom rác ngay ở luồng chính."""
+    tat_nong = patch.object(doc_voice.App, "_lam_nong", lambda self: None)
+    tat_nong.start()
+    test.addCleanup(tat_nong.stop)
+    _gc.collect()                       # App đã đóng trước đó (kể cả _thoat() rồi mở lại): dọn ở luồng chính
+    app = doc_voice.App()
+    _TCL_DA_MO.append(app.tk)
+    app.withdraw()
+    test.addCleanup(_dong_app, weakref.ref(app))
+    app.update()
+    return app
+
+
+def _dong_app(ref):
+    app = ref()
+    if app is not None:
+        try:
+            app.destroy()
+        except tkinter.TclError:        # đã đóng bằng _thoat()
+            pass
+    del app
+    _gc.collect()
 
 
 def gia_lap_edge(chu_doan, tu_moi_giay=3.2, im_lang_cuoi=0.06):
@@ -1322,11 +1358,7 @@ class KiemTraChonSanArthur(unittest.TestCase):
             (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, doc_voice.gc.ds_giong, doc_voice.App._tai_giong) = cu
             shutil.rmtree(tam, ignore_errors=True)
         self.addCleanup(tra)
-        app = doc_voice.App()
-        app.withdraw()
-        self.addCleanup(app.destroy)
-        app.update()
-        return app
+        return mo_app_an(self)
 
     def test_lan_dau_mo_ban_co_arthur_thi_chon_arthur(self):
         app = self._mo_app({"ngon_ngu": "en-AU", "giong": "en-AU-WilliamMultilingualNeural"})
@@ -1579,10 +1611,7 @@ class KiemTraTuDichVaToCau(unittest.TestCase):
             (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, doc_voice.FILE_BO_DEM_DICH, doc_voice.App._tai_giong,
              doc_voice.dich_cau) = cu
         self.addCleanup(tra)
-        app = doc_voice.App()
-        app.withdraw()
-        self.addCleanup(app.destroy)
-        app.update()
+        app = mo_app_an(self)
         self.assertNotIn("fmXin", app.o_dich.get("1.0", "end"))
         app._tu_dich(bat_ky=True)
         import time
@@ -1977,12 +2006,7 @@ class KiemTraGiongNhapVaGiuLuaChon(unittest.TestCase):
         return tam, file_cd
 
     def _mo(self):
-        app = doc_voice.App()
-        app.withdraw()
-        self.addCleanup(__import__("gc").collect)       # sau destroy: dọn biến Tk ở luồng chính (tránh Tcl_AsyncDelete)
-        self.addCleanup(app.destroy)
-        app.update()
-        return app
+        return mo_app_an(self)
 
     def test_ban_team_chua_co_giong_thi_co_huong_dan_nhap_giong(self):
         tam, file_cd = self._hop_cat()
@@ -2175,10 +2199,6 @@ class KiemTraMoApp(unittest.TestCase):
             {"ShortName": "en-US-AndrewMultilingualNeural", "Locale": "en-US", "Gender": "Male"},
             {"ShortName": "vi-VN-NamMinhNeural", "Locale": "vi-VN", "Gender": "Male"}]
 
-    def tearDown(self):
-        import gc as _gc
-        _gc.collect()                  # dọn biến Tk ngay ở luồng chính, không để luồng khác dọn (Tcl_AsyncDelete)
-
     def test_arthur_dau_danh_sach_tieng_anh(self):
         for loc in ("en-US", "en-AU"):
             ds = doc_voice.danh_sach_giong(loc, self.EDGE)
@@ -2201,10 +2221,8 @@ class KiemTraMoApp(unittest.TestCase):
             goc = (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, doc_voice.App._tai_giong)
             doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG = cai_dat, giong
             doc_voice.App._tai_giong = lambda self: None      # không gọi mạng
-            app = doc_voice.App()
+            app = mo_app_an(self)
             try:
-                app.withdraw()
-                app.update()
                 self.assertEqual(app._locales[app.ngon_ngu.current()], "clone")
                 self.assertEqual(app._tham_so()[0], "clone:arthur")
                 self.assertTrue(app.nhan_giong.cget("text").startswith("Giọng đang chọn: Arthur (clone) · "))
@@ -2238,12 +2256,7 @@ class KiemTraMoApp(unittest.TestCase):
             doc_voice.App._tai_giong = lambda self: None
 
             def mo():
-                import gc as _gc
-                _gc.collect()          # app cũ đã đóng: dọn biến Tk ở luồng chính trước khi mở app mới
-                app = doc_voice.App()
-                app.withdraw()
-                app.update()
-                return app
+                return mo_app_an(self)
             try:
                 # 1. cài đặt cũ nhớ William, lần đầu mở bản mới: thành Arthur, ghi khoá đánh dấu
                 app = mo()
@@ -2310,8 +2323,6 @@ class KiemTraAppVong2(unittest.TestCase):
 
     def tearDown(self):
         (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, doc_voice.App._tai_giong) = self.goc
-        import gc as _gc
-        _gc.collect()                  # dọn biến Tk ngay ở luồng chính, không để luồng khác dọn (Tcl_AsyncDelete)
         self.tam.cleanup()
 
     def _cho(self, app, dk, giay=5):
@@ -2327,10 +2338,8 @@ class KiemTraAppVong2(unittest.TestCase):
     def test_app_hien_tien_do_va_nhay_moi_giay(self):
         import time as _t
         doc_voice.ghi_json(doc_voice.FILE_CAI_DAT, {"thu_muc_ra": self.tam.name})
-        app = doc_voice.App()
+        app = mo_app_an(self)
         try:
-            app.withdraw()
-            app.update()
             with app._khoa_trang_thai:
                 app.dang_chay = True
             app._t_bat_dau_luot = _t.time() - 30
@@ -2353,10 +2362,8 @@ class KiemTraAppVong2(unittest.TestCase):
     def test_thu_muc_ra_rong_khong_lam_app_chet(self):
         """cai_dat.json có thu_muc_ra rỗng làm exe chết lúc mở."""
         doc_voice.ghi_json(doc_voice.FILE_CAI_DAT, {"thu_muc_ra": ""})
-        app = doc_voice.App()
+        app = mo_app_an(self)
         try:
-            app.withdraw()
-            app.update()
             self.assertEqual(app.thu_muc_ra, doc_voice.THU_MUC_RA)
         finally:
             app.destroy()
@@ -3058,14 +3065,149 @@ class KiemTraProxyChetVaArthurLucMo(unittest.TestCase):
             (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, doc_voice.gc.ds_giong, doc_voice.App._tai_giong) = cu
             shutil.rmtree(tam, ignore_errors=True)
         self.addCleanup(tra)
-        app = doc_voice.App()
-        app.withdraw()
-        self.addCleanup(app.destroy)
-        app.update()
+        app = mo_app_an(self)
         self.assertTrue(app.ngon_ngu.get())
         self.assertTrue(app.chon_giong.get())
         self.assertEqual(app._locales[app.ngon_ngu.current()], doc_voice.MA_CLONE)
         self.assertEqual(app._tham_so()[0], "clone:arthur")
+
+
+class KiemTraKiemDocKhongTreo(unittest.TestCase):
+    """Bộ kiểm whisper nạp model treo (ổ HDD bận, mạng không trả lời) thì app không được đứng ở "Bật bộ kiểm đọc";
+    model.bin phải được đọc trước bằng khối lớn rồi mới nạp (NV-1299)."""
+
+    def test_doc_dong_co_han_tra_rong_khi_treo(self):
+        import subprocess
+        import sys
+        import time
+        gc = doc_voice.gc
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=subprocess.PIPE, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.addCleanup(p.kill)
+        t = time.time()
+        self.assertEqual(gc._doc_dong_co_han(p.stdout, 1), "")
+        self.assertLess(time.time() - t, 5)
+
+    def test_kiem_doc_treo_thi_bo_kiem(self):
+        import sys
+        import tempfile
+        import time
+        gc = doc_voice.gc
+        cu = (gc._MA_KIEM, gc.KiemDoc.CHO_NAP)
+        gc._MA_KIEM, gc.KiemDoc.CHO_NAP = "import time" + "\n" + "time.sleep(60)" + "\n", 1
+
+        def tra():
+            gc._MA_KIEM, gc.KiemDoc.CHO_NAP = cu
+        self.addCleanup(tra)
+        tam = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tam, True)
+        t = time.time()
+        kd = gc.KiemDoc(sys.executable, tam)
+        self.assertFalse(kd.co)
+        self.assertLess(time.time() - t, 10)
+
+    def test_ma_kiem_nap_bo_nho_dem_truoc(self):
+        self.assertIn("local_files_only=True", doc_voice.gc._MA_KIEM)
+        import kiem_chat_luong
+        with open(kiem_chat_luong.__file__, encoding="utf-8") as f:
+            self.assertIn("local_files_only=True", f.read())
+
+    def test_doc_truoc_model_truoc_khi_nap(self):
+        self.assertEqual(kcl._MA_DOC_TRUOC, gc._MA_DOC_TRUOC)
+        for ten, ma in (("giong_clone._MA_KIEM", gc._MA_KIEM), ("kiem_chat_luong._MA_NANG", kcl._MA_NANG)):
+            goi = re.search(r"^\s*doc_truoc_model\(", ma, re.M)
+            nap = re.search(r"WhisperModel\(", ma)
+            self.assertTrue(goi and nap and goi.start() < nap.start(), ten + ": phải đọc trước model.bin rồi mới nạp")
+            compile(ma, ten, "exec")
+
+    def test_doc_truoc_model_doc_het_file_bang_khoi_lon(self):
+        import sys
+        import tempfile
+        import types
+        tam = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tam, True)
+        with open(os.path.join(tam, "model.bin"), "wb") as f:
+            f.write(os.urandom(40 << 20))
+        doc = []
+
+        class Tep:
+            def __init__(self, f):
+                self.f = f
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                self.f.close()
+
+            def readinto(self, b):
+                n = self.f.readinto(b)
+                doc.append((len(b), n))
+                return n
+
+        g = {"open": lambda *a, **k: Tep(open(*a, **k))}
+        exec(gc._MA_DOC_TRUOC, g)
+        utils = types.ModuleType("faster_whisper.utils")
+        utils.download_model = lambda ten, local_files_only=False: tam if local_files_only else self.fail("gọi mạng")
+        goi = types.ModuleType("faster_whisper")
+        goi.utils = utils
+        with patch.dict(sys.modules, {"faster_whisper": goi, "faster_whisper.utils": utils}):
+            g["doc_truoc_model"]("small")
+        self.assertEqual(sum(n for _, n in doc), 40 << 20)
+        self.assertTrue(all(c >= 16 << 20 for c, _ in doc))
+
+        def chua_co(ten, local_files_only=False):
+            raise FileNotFoundError(ten)
+        utils.download_model = chua_co
+        doc.clear()
+        with patch.dict(sys.modules, {"faster_whisper": goi, "faster_whisper.utils": utils}):
+            g["doc_truoc_model"]("small")                   # chưa tải model: bỏ qua, không lỗi
+        self.assertEqual(doc, [])
+
+
+class KiemTraTkChiHuyOLuongChinh(unittest.TestCase):
+    """Cả bộ test chạy một tiến trình (cổng test của phat-hanh.ps1) không được chết vì Tcl_AsyncDelete:
+    bộ thông dịch Tcl của App test chỉ được huỷ ở luồng chính, kể cả khi bộ gom rác chạy ở luồng phụ."""
+
+    # tiến trình con: mở App qua mo_app_an, một App còn bị "luồng nền" giữ lúc test dọn, rồi gom rác ở luồng phụ
+    MA_CON = "\n".join([
+        "import gc, os, sys, tempfile, threading, unittest",
+        "sys.path.insert(0, sys.argv[1])",
+        "import kiem_tra_doc_voice as k",
+        "d = k.doc_voice",
+        "tam = tempfile.mkdtemp()",
+        "d.FILE_CAI_DAT, d.FILE_GIONG = os.path.join(tam, 'cd.json'), os.path.join(tam, 'g.json')",
+        "d.App._tai_giong = lambda self: None",
+        "giu = []",
+        "class T(unittest.TestCase):",
+        "    def test_mo(self):",
+        "        k.mo_app_an(self)",
+        "    def test_mo_con_bi_giu(self):",
+        "        giu.append(k.mo_app_an(self))",
+        "gc.disable()",
+        "kq = unittest.TextTestRunner(verbosity=0).run(unittest.defaultTestLoader.loadTestsFromTestCase(T))",
+        "giu.clear()",
+        "t = threading.Thread(target=gc.collect)",
+        "t.start()",
+        "t.join()",
+        "print('SONG', kq.wasSuccessful(), flush=True)",
+    ])
+
+    def test_moi_app_test_mo_qua_mo_app_an(self):
+        with open(os.path.abspath(__file__), encoding="utf-8") as f:
+            ma = f.read()
+        self.assertEqual(len(re.findall(r"doc_voice\.App\(", ma)), 1)        # chỉ một chỗ: trong mo_app_an
+        self.assertEqual(re.findall(r"\b(?:tk|tkinter)\.Tk\(", ma), [])
+
+    def test_gom_rac_o_luong_phu_khong_lam_chet_tien_trinh(self):
+        import sys
+        goc = os.path.dirname(os.path.abspath(__file__))
+        r = subprocess.run([sys.executable, "-X", "utf8", "-c", self.MA_CON, goc], cwd=goc, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=600, creationflags=CREATE_NO_WINDOW)
+        ra = r.stdout + r.stderr
+        self.assertNotIn("Tcl_AsyncDelete", ra)
+        self.assertEqual(r.returncode, 0, ra[-1500:])
+        self.assertIn("SONG True", r.stdout)
 
 
 if __name__ == "__main__":
