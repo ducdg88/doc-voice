@@ -815,6 +815,8 @@ def python_voxcpm(cfg, thu_muc_studio=""):
     for py in ung_vien:
         if venv_co_goi(py, "voxcpm"):
             return py
+    if not thu_muc_studio:               # không có Studio thì Chuẩn cao không chạy được: khỏi dò ổ
+        return dat
     for py in venv_tren_o((".venv-voxcpm",) + TEN_VENV):      # dò ổ chỉ khi các chỗ trên không có
         if venv_co_goi(py, "voxcpm"):
             return py

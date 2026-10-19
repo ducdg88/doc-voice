@@ -3406,19 +3406,23 @@ class KiemTraDuongMayKhongGhiCung(unittest.TestCase):
             py = self._venv(os.path.join(o, "bot", ".venv-voxcpm"), "voxcpm")
             self._venv(os.path.join(o, "a", "sau", ".venv"), "voxcpm")         # sâu hai tầng: không dò
             self._venv(os.path.join(o, "b", ".venv"), "torch")
+            st = os.path.join(tam, "studio")                                   # Studio không ghi lệnh chạy
+            os.makedirs(st)
             dem = []
 
             def o_dia():
                 dem.append(1)
                 return [o]
             with self._env(), patch.object(gc, "_o_dia_co_dinh", o_dia), patch.object(gc, "_VENV_DA_DO", {}):
+                self.assertEqual(gc.python_voxcpm({}, ""), "")                 # không có Studio: không dò ổ
+                self.assertEqual(dem, [])
                 self.assertEqual(gc.venv_tren_o((".venv",)), [os.path.join(o, "b", ".venv", "Scripts", "python.exe")])
-                self.assertEqual(gc.python_voxcpm({}, ""), py)
-                self.assertEqual(gc.python_voxcpm({}, ""), py)
+                self.assertEqual(gc.python_voxcpm({}, st), py)
+                self.assertEqual(gc.python_voxcpm({}, st), py)
                 self.assertEqual(len(dem), 2)                                  # mỗi bộ tên venv dò ổ một lần
             with self._env(), patch.object(gc, "_o_dia_co_dinh", lambda: [os.path.join(tam, "rong")]), \
                     patch.object(gc, "_VENV_DA_DO", {}):
-                self.assertEqual(gc.python_voxcpm({}, ""), "")
+                self.assertEqual(gc.python_voxcpm({}, st), "")
 
     def test_python_kiem_chon_venv_co_resemblyzer(self):
         """P2-1 vòng 1: không biến DOCVOICE_PYTHON_KIEM vẫn tìm venv kiểm sâu có sẵn (có resemblyzer đứng trước),
