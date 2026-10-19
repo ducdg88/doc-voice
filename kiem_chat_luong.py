@@ -846,10 +846,15 @@ def kiem_nang(duong_am, moc, ref="", python="", model="small", ngon_ngu="en", ng
     cfg_p = os.path.join(thu, "kiem_nang_cfg.json")
     with open(ma, "w", encoding="utf-8") as f:
         f.write(_MA_NANG)
+    # dấu giọng .npy (bản Arthur nhúng, không kèm mẫu âm thanh) không phải âm thanh: không đem so như mẫu
+    am_mau = ref if (ref and not ref.lower().endswith(".npy")) else ""
+    if ref and not am_mau:
+        ra["chua_kiem"].append("Chưa đo độ giống với mẫu: giọng chỉ có dấu giọng, không có mẫu âm thanh "
+                               "(vẫn đo giọng từng câu so với cả bài)")
     cfg = {"ffmpeg": ff, "am": duong_am, "moc": [[m[0], m[1]] for m in moc], "whisper": co_w,
-           "model": model, "ngon_ngu": ngon_ngu, "ref": ref if (ref and co_g) else "",
+           "model": model, "ngon_ngu": ngon_ngu, "ref": am_mau if co_g else "",
            "bo_qua": [str(k) for k in (nghe_san or {})], "phan_toi_thieu_s": PHAN_TOI_THIEU_S,
-           "ref_cau": ref if ref else "",
+           "ref_cau": am_mau,
            "mo_hinh_cau": duong_mo_hinh_giong_cau(), "mo_hinh_cau_url": MO_HINH_GIONG_CAU_URL,
            "mo_hinh_cau_sha256": MO_HINH_GIONG_CAU_SHA256}
     with open(cfg_p, "w", encoding="utf-8") as f:

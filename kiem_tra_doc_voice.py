@@ -2629,6 +2629,26 @@ class KiemTraKiemChatLuong(unittest.TestCase):
         self.assertEqual([e for e in bc["loi"] if e["loai"] == "sai_giong"], [])     # không lùi về ngưỡng resemblyzer cũ
         self.assertTrue(any("từng câu" in c for c in bc["chua_kiem"]), bc["chua_kiem"])
 
+    def test_dau_giong_npy_khong_dem_so_nhu_mau_am_thanh(self):
+        """Bản Arthur nhúng chỉ có dấu giọng se.npy: không đưa .npy cho resemblyzer như âm thanh (ra điểm giả rồi
+        KHÔNG ĐẠT); ghi rõ chưa đo độ giống với mẫu, vẫn đo giọng từng câu. Mẫu .wav thì vẫn so như cũ."""
+        import tempfile
+        import types
+        da_gui = []
+
+        def gia_run(lenh, **kw):
+            with open(lenh[3], encoding="utf-8") as f:
+                da_gui.append(json.load(f))
+            return types.SimpleNamespace(stdout="KQ>{}", stderr="")
+        with tempfile.TemporaryDirectory() as t, patch.object(kcl, "tim_ffmpeg", lambda: "ffmpeg"),                 patch.object(kcl.subprocess, "run", gia_run):
+            ra = kcl.kiem_nang(os.path.join(t, "a.mp3"), [[0, 2]], ref=os.path.join("giong_nhung", "arthur", "se.npy"),
+                               python="py.exe", thu_muc_tam=t)
+            self.assertEqual((da_gui[-1]["ref"], da_gui[-1]["ref_cau"]), ("", ""))
+            self.assertTrue(any("dấu giọng" in c for c in ra["chua_kiem"]), ra["chua_kiem"])
+            ra = kcl.kiem_nang(os.path.join(t, "a.mp3"), [[0, 2]], ref="ref.wav", python="py.exe", thu_muc_tam=t)
+            self.assertEqual((da_gui[-1]["ref"], da_gui[-1]["ref_cau"]), ("ref.wav", "ref.wav"))
+            self.assertFalse(any("dấu giọng" in c for c in ra["chua_kiem"]), ra["chua_kiem"])
+
     def test_chi_do_giong_tung_cau_khong_co_ca_bai_van_luu_bao_cao(self):
         """Máy không có resemblyzer: chỉ có số đo từng câu (wespeaker), không có độ giống cả bài. Báo cáo html vẫn
         ghi được, không sập KeyError 'ca_bai' (nút Kiểm chất lượng trong app đi cùng đường luu_bao_cao)."""
