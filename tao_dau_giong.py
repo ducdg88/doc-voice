@@ -1,4 +1,4 @@
-"""Tạo dấu giọng (embedding OpenVoice V2, 256 số float32, 1 KB) từ một mẫu .wav để nhúng vào bản đóng sẵn.
+r"""Tạo dấu giọng (embedding OpenVoice V2, 256 số float32, 1 KB) từ một mẫu .wav để nhúng vào bản đóng sẵn.
 Dùng: python tao_dau_giong.py <ref.wav> <slug>   ->  giong_nhung/<slug>/se.npy
 Cần model nhẹ đã tải (%LOCALAPPDATA%\DocVoice\may_nhe) và ffmpeg. File ra KHÔNG chứa âm thanh; không đưa vào git."""
 import os

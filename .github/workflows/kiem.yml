@@ -12,6 +12,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyflakes
-      - run: python -m compileall -q doc_voice.py
-      - run: python -m pyflakes doc_voice.py
+      # mọi file .py trong git, không chỉ doc_voice.py; SyntaxWarning (ví dụ dấu \ lạ trong chuỗi) tính là lỗi
+      - run: python -W error::SyntaxWarning -m compileall -q -f (git ls-files '*.py')
+      - run: python -m pyflakes (git ls-files '*.py')
       - run: python kiem_tra_doc_voice.py

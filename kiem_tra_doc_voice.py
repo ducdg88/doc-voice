@@ -1171,7 +1171,6 @@ class KiemTraNgheLuong(unittest.TestCase):
 
     def test_phat_luong_dem_truoc_khi_may_ban(self):
         """máy đọc chậm hơn tiếng phát (RTF > 0,85) thì gom sẵn vài câu rồi mới phát, vấp thì đệm gấp đôi."""
-        import threading
         import time
         import numpy as np
         pl = doc_voice.pl
@@ -3074,7 +3073,7 @@ class KiemTraProxyChetVaArthurLucMo(unittest.TestCase):
 
 class KiemTraKiemDocKhongTreo(unittest.TestCase):
     """Bộ kiểm whisper nạp model treo (ổ HDD bận, mạng không trả lời) thì app không được đứng ở "Bật bộ kiểm đọc";
-    model.bin phải được đọc trước bằng khối lớn rồi mới nạp (NV-1299)."""
+    model.bin phải được đọc trước bằng khối lớn rồi mới nạp."""
 
     def test_doc_dong_co_han_tra_rong_khi_treo(self):
         import subprocess
@@ -3208,6 +3207,192 @@ class KiemTraTkChiHuyOLuongChinh(unittest.TestCase):
         self.assertNotIn("Tcl_AsyncDelete", ra)
         self.assertEqual(r.returncode, 0, ra[-1500:])
         self.assertIn("SONG True", r.stdout)
+
+
+# Chữ không được nằm trong kho công khai: mã việc nội bộ, tên vai nội bộ, đường dẫn ổ đĩa của một máy.
+# Mẫu viết [V], [o], [E], [C] (một ký tự) để chính file này không tự khớp.
+MAU_CHU_NOI_BO = [r"\bN[V]-\d+", r"(?i:\bf[o]under)", r"\b[E]:[\\/]", r"(?i:\b[C]:[\\/]Users\b)"]
+
+
+def quet_chu_noi_bo(goc, ds_file, mau=MAU_CHU_NOI_BO):
+    """Trả các dòng "file:số dòng: chữ" khớp một mẫu. Bỏ qua file nhị phân (png, npy, onnx)."""
+    loi = []
+    for ten in ds_file:
+        duong = os.path.join(goc, ten)
+        if not os.path.isfile(duong):
+            continue
+        with open(duong, "rb") as f:
+            du_lieu = f.read()
+        if b"\0" in du_lieu[:8000]:
+            continue
+        for so, dong in enumerate(du_lieu.decode("utf-8", errors="replace").splitlines(), 1):
+            if any(re.search(m, dong) for m in mau):
+                loi.append(f"{ten}:{so}: {dong.strip()[:120]}")
+    return loi
+
+
+class KiemTraMaSachCongKhai(unittest.TestCase):
+    """Khoá cùng bước của CI kiem: mọi file .py trong git qua pyflakes và biên dịch không cảnh báo cú pháp; mọi file
+    trong git (kho công khai) không có chữ nội bộ. CI cũ chỉ lint doc_voice.py, nên lỗi ở file khác không ai thấy, và
+    lỗi pyflakes trong doc_voice.py làm CI đỏ từ 1.5.0 mà test vẫn xanh."""
+    DUOC_PHEP = {}      # {"file:số dòng": lý do}; để trống, thêm chỗ nào phải ghi lý do và được duyệt
+    maxDiff = None
+
+    def _goc(self):
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _file_git(self, *mau):
+        if not which("git"):
+            self.skipTest("máy không có git")
+        r = run(["git", "ls-files", "-z", *mau], cwd=self._goc(), capture_output=True, timeout=60,
+                creationflags=CREATE_NO_WINDOW)
+        if r.returncode != 0:
+            self.skipTest("thư mục không phải kho git")
+        return [f for f in r.stdout.decode("utf-8").split("\0") if f]
+
+    def _pyflakes(self, ds_file, cwd):
+        import importlib.util
+        import sys
+        if importlib.util.find_spec("pyflakes") is None:
+            self.skipTest("chưa cài pyflakes (pip install pyflakes); CI kiem cài sẵn")
+        return run([sys.executable, "-m", "pyflakes", *ds_file], cwd=cwd, capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", timeout=300, creationflags=CREATE_NO_WINDOW)
+
+    def test_pyflakes_moi_file_py(self):
+        ds = self._file_git("*.py")
+        self.assertIn("doc_voice.py", ds)
+        self.assertIn(os.path.basename(__file__), ds)
+        r = self._pyflakes(ds, self._goc())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_bien_dich_khong_canh_bao_cu_phap(self):
+        import warnings
+        for ten in self._file_git("*.py"):
+            with open(os.path.join(self._goc(), ten), encoding="utf-8") as f:
+                ma = f.read()
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                try:
+                    compile(ma, ten, "exec")
+                except (SyntaxError, SyntaxWarning) as e:
+                    self.fail(f"{ten}: {e}")
+
+    def test_khong_co_chu_noi_bo_trong_kho(self):
+        loi = [d for d in quet_chu_noi_bo(self._goc(), self._file_git())
+               if d.split(": ", 1)[0] not in self.DUOC_PHEP]
+        self.assertEqual(loi, [])
+
+    def test_bat_duoc_cac_loi_cu(self):
+        """Phép thử ngược: mẫu phat_cb của 1.5.0, docstring có dấu \\ lạ, chữ nội bộ đều phải bị bắt."""
+        import warnings
+        with TemporaryDirectory() as tam:
+            mau = {"a.md": "xem N" + "V-1299", "b.md": "trên máy Found" + "er", "c.py": 'p = r"E' + ':\\DG Voice Studio"',
+                   "d.txt": "cache ở c" + ":/users/x/.cache",
+                   "e.md": "chữ sạch: 127.0.0.1, %APPDATA%\\DocVoice, except FileNotFoundError, NV-arthur"}
+            for ten, chu in mau.items():
+                with open(os.path.join(tam, ten), "w", encoding="utf-8") as f:
+                    f.write(chu + "\n")
+            loi = quet_chu_noi_bo(tam, list(mau))
+            self.assertEqual(sorted(d.split(":", 1)[0] for d in loi), ["a.md", "b.md", "c.py", "d.txt"])
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                with self.assertRaises((SyntaxError, SyntaxWarning)):
+                    compile('"""%LOCALAPPDATA%' + "\\" + 'DocVoice"""\n', "x.py", "exec")
+            with open(os.path.join(tam, "cu.py"), "w", encoding="utf-8") as f:
+                f.write("def f(luong):\n    phat_cb = None\n    if luong:\n        def phat_cb():\n"
+                        "            return 1\n    return phat_cb\n")
+            r = self._pyflakes(["cu.py"], tam)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("redefinition of unused 'phat_cb'", r.stdout)
+
+
+class KiemTraDuongMayKhongGhiCung(unittest.TestCase):
+    """Thư mục DG Voice Studio và python VoxCPM không ghi cứng: Cài đặt, config.json của Studio, biến môi trường,
+    rồi tự tìm ở gốc các ổ cố định. Thiếu thì báo rõ, không đọc nhầm config.json ở thư mục hiện hành."""
+
+    def _env(self, **bien):
+        sach = {k: v for k, v in os.environ.items()
+                if k not in ("DOCVOICE_STUDIO", "DOCVOICE_VOXCPM_PYTHON", "DOCVOICE_PYTHON_KIEM")}
+        sach.update(bien)
+        return patch.dict(os.environ, sach, clear=True)
+
+    def test_studio_lay_bien_moi_truong_truoc(self):
+        with TemporaryDirectory() as tam, self._env(DOCVOICE_STUDIO=tam), \
+                patch.object(gc, "_o_dia_co_dinh", lambda: self.fail("có biến thì không dò ổ")):
+            self.assertEqual(gc.thu_muc_studio_mac_dinh(), tam)
+            self.assertEqual(gc.MayDocVoxCPM().studio, tam)
+            self.assertEqual(gc.MayDocRieng().studio, tam)
+
+    def test_studio_do_o_co_dinh_va_nho_ket_qua(self):
+        with TemporaryDirectory() as tam:
+            st = os.path.join(tam, gc.TEN_STUDIO)
+            os.makedirs(st)
+            with open(os.path.join(st, "voice_daemon.py"), "w", encoding="utf-8") as f:
+                f.write("\n")
+            dem = []
+
+            def o_dia():
+                dem.append(1)
+                return [os.path.join(tam, "khong-co"), tam]
+            with self._env(), patch.object(gc, "_o_dia_co_dinh", o_dia), patch.object(gc, "_STUDIO_DA_DO", []):
+                self.assertEqual(gc.thu_muc_studio_mac_dinh(), st)
+                self.assertEqual(gc.thu_muc_studio_mac_dinh(), st)
+                self.assertEqual(len(dem), 1)
+            with self._env(), patch.object(gc, "_o_dia_co_dinh", lambda: [os.path.join(tam, "khong-co")]), \
+                    patch.object(gc, "_STUDIO_DA_DO", []):
+                self.assertEqual(gc.thu_muc_studio_mac_dinh(), "")
+
+    def test_o_dia_co_dinh_la_goc_o(self):
+        ds = gc._o_dia_co_dinh()
+        if os.name == "nt":
+            self.assertTrue(ds)
+        for o in ds:
+            self.assertRegex(o, r"^[A-Z]:\\$")
+
+    def test_python_voxcpm_config_roi_bien(self):
+        with self._env(DOCVOICE_VOXCPM_PYTHON="bien.exe"):
+            self.assertEqual(gc.python_voxcpm({"voxcpm_python": "cfg.exe"}), "cfg.exe")
+            self.assertEqual(gc.python_voxcpm({}), "bien.exe")
+        with self._env():
+            self.assertEqual(gc.python_voxcpm({}), "")
+
+    def test_thieu_studio_bao_ro_khong_doc_thu_muc_hien_hanh(self):
+        with TemporaryDirectory() as tam:
+            with open(os.path.join(tam, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"voxcpm_python": "la.exe", "dg_root": tam}, f)
+            cu = os.getcwd()
+            os.chdir(tam)
+            try:
+                with self._env(), patch.object(gc, "_STUDIO_DA_DO", [""]):
+                    vox = gc.MayDocVoxCPM()
+                    self.assertEqual((vox.studio, vox._cfg(), vox.co_san()), ("", {}, False))
+                    with patch.object(vox, "trang_thai", lambda: {"running": False}):
+                        with self.assertRaises(gc.LoiClone) as e:
+                            vox.bat()
+                    self.assertIn("DOCVOICE_STUDIO", str(e.exception))
+                    rieng = gc.MayDocRieng(None, os.path.join(tam, "log"))
+                    self.assertEqual((rieng.python(), rieng.goc_model(), rieng.co_san()), ("", "", False))
+                    with self.assertRaises(gc.LoiClone) as e:
+                        rieng.bat()
+                    self.assertIn("DOCVOICE_VOXCPM_PYTHON", str(e.exception))
+            finally:
+                os.chdir(cu)
+
+    def test_python_kiem_chat_luong_tu_bien(self):
+        import sys
+        import types
+        da_thu = []
+
+        def gia_run(lenh, **kw):
+            da_thu.append(lenh[0])
+            return types.SimpleNamespace(stdout="1 1")
+        gia = dict(shutil=types.SimpleNamespace(which=lambda ten: None), subprocess=types.SimpleNamespace(run=gia_run))
+        with self._env(DOCVOICE_PYTHON_KIEM=sys.executable), patch.multiple(kcl, **gia):
+            self.assertEqual(kcl.tim_python_nang(), (sys.executable, True, True))
+        self.assertEqual(da_thu, [sys.executable])
+        with self._env(), patch.multiple(kcl, **gia):
+            self.assertEqual(kcl.tim_python_nang(), ("", False, False))
+        self.assertEqual(da_thu, [sys.executable])        # không biến, không python trên PATH: không thử gì
 
 
 if __name__ == "__main__":

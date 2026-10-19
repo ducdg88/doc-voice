@@ -2,7 +2,10 @@
 
 Trọng số được nạp lúc chạy từ checkpoint.pth công khai trên Hugging Face (myshell-ai/OpenVoiceV2,
 MIT) bằng bộ đọc không cần torch; file này chỉ ghi đồ thị + công thức map tên trọng số.
-Chạy bằng venv có torch + onnx: .venv-ov\\Scripts\\python.exe scripts\\xuat_onnx.py <thư mục ra>
+Chạy bằng venv có torch + onnx:
+  .venv-ov\\Scripts\\python.exe may_nhe_onnx\\xuat_onnx.py <thư mục ra> <mã nguồn OpenVoice> <thư mục model>
+<mã nguồn OpenVoice>: bản git của myshell-ai/OpenVoice; <thư mục model>: có config.json và checkpoint.pth
+(converter của OpenVoiceV2 trên Hugging Face).
 """
 import json
 import os
@@ -12,7 +15,10 @@ import types
 import numpy as np
 import torch
 
-sys.path.insert(0, r"E:\DocGiong-tools\ov-src")
+if len(sys.argv) != 4:
+    sys.exit("Dùng: xuat_onnx.py <thư mục ra> <mã nguồn OpenVoice> <thư mục model>")
+RA, OV_SRC, OV_MODEL = sys.argv[1:4]
+sys.path.insert(0, OV_SRC)
 fake = types.ModuleType("openvoice.text")
 fake.text_to_sequence = None
 sys.modules["openvoice.text"] = fake
@@ -21,10 +27,9 @@ from openvoice.models import SynthesizerTrn  # noqa: E402
 import onnx  # noqa: E402
 from onnx import numpy_helper  # noqa: E402
 
-RA = sys.argv[1]
 os.makedirs(RA, exist_ok=True)
-CFG = r"E:\DocGiong-tools\ov-model\config.json"
-CKPT = r"E:\DocGiong-tools\ov-model\checkpoint.pth"
+CFG = os.path.join(OV_MODEL, "config.json")
+CKPT = os.path.join(OV_MODEL, "checkpoint.pth")
 hps = utils.get_hparams_from_file(CFG)
 model = SynthesizerTrn(0, hps.data.filter_length // 2 + 1, n_speakers=hps.data.n_speakers, **hps.model)
 sd_goc = torch.load(CKPT, map_location="cpu")["model"]

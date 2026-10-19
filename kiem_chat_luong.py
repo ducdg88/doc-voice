@@ -82,7 +82,7 @@ def tim_ffmpeg():
     p = shutil.which("ffmpeg")
     if p:
         return p
-    for thu in (r"C:\ffmpeg\bin\ffmpeg.exe", r"E:\ffmpeg\bin\ffmpeg.exe"):
+    for thu in (r"C:\ffmpeg\bin\ffmpeg.exe",):
         if os.path.isfile(thu):
             return thu
     return ""
@@ -643,7 +643,7 @@ _MA_DOC_TRUOC = r'''
 def doc_truoc_model(ten):
     """Đọc trước model.bin bằng khối 16 MB cho file vào bộ đệm hệ điều hành, rồi mới nạp. ctranslate2 tự đọc theo
     khối nhỏ: trên ổ HDD đang bận, mỗi khối phải xếp hàng nên chỉ còn khoảng 0,1 MB/s (model small 483 MB mất
-    cả giờ, NV-1299); khối lớn trên cùng ổ vẫn khoảng 44 MB/s. Chưa có model trong bộ nhớ đệm thì bỏ qua (sẽ tải)."""
+    cả giờ); khối lớn trên cùng ổ vẫn khoảng 44 MB/s. Chưa có model trong bộ nhớ đệm thì bỏ qua (sẽ tải)."""
     try:
         import os
         if os.path.isdir(ten):
@@ -770,9 +770,11 @@ print("KQ>" + json.dumps(kq, ensure_ascii=True), flush=True)     # chỉ ASCII: 
 
 
 def tim_python_nang(goi_y=""):
-    """Python có faster_whisper (và nếu có thì resemblyzer). Trả (đường python, có_whisper, có_giọng)."""
+    """Python có faster_whisper (và nếu có thì resemblyzer). Trả (đường python, có_whisper, có_giọng).
+    Thứ tự thử: goi_y, biến DOCVOICE_PYTHON_KIEM, rồi python trên PATH."""
     ung_vien = [goi_y] if goi_y else []
-    for p in (r"E:\DocGiong-tools\.venv-do\Scripts\python.exe",):
+    p = os.environ.get("DOCVOICE_PYTHON_KIEM", "").strip()
+    if p:
         ung_vien.append(p)
     for ten in ("python", "py"):
         p = shutil.which(ten)

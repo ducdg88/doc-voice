@@ -134,7 +134,7 @@ FILE_CAI_DAT = os.path.join(GOC, "cai_dat.json")
 DO_DAI_DOAN = 2500  # ký tự mỗi lượt gửi máy chủ
 SO_LAN_THU = 4
 SONG_SONG = 3  # số đoạn gửi máy chủ cùng lúc
-PHIEN_BAN = "1.6.0"
+PHIEN_BAN = "1.6.1"
 KHO_GITHUB = "ducdg88/doc-voice"
 TEN_EXE = "DocVoice.exe"
 LINK_TAI_HOP_LE = f"https://github.com/{KHO_GITHUB}/releases/download/"
@@ -2797,7 +2797,7 @@ class App(tk.Tk):
                 self._tang_luong = None
                 self._lech_to_luong = []
 
-                def phat_cb(su_kien, **kw):
+                def _phat_cb(su_kien, **kw):
                     if su_kien != "phan":
                         return
                     im = bool(os.environ.get("DOCVOICE_IM")) and che_do_thu()   # tự thử: đo đúng nhịp, không phát ra loa
@@ -2810,6 +2810,7 @@ class App(tk.Tk):
                     self._vi_tri_phan = None
                     self.after(0, lambda ph=kw["phan"]: setattr(self, "_vi_tri_phan", self._tim_vi_tri_phan(ph)))
                     p.phat_tu(bat_dau)
+                phat_cb = _phat_cb
                 self.after(0, self._bao, f"{may.ten}: đang đọc câu đầu, sắp có tiếng...", 0)
             wav_ra = os.path.splitext(duong_ra)[0] + ".wav" if (self.cd.get("xuat_wav") and not nghe_thu) else ""
 
@@ -2878,7 +2879,7 @@ class App(tk.Tk):
             if not co_nvidia():
                 raise gc.LoiClone("Máy không có GPU NVIDIA nên không chạy được Chuẩn cao (GPU). Chọn Máy đọc: "
                                   "Nhẹ (mọi máy).")
-            may = gc.MayDocVoxCPM(self.cd.get("thu_muc_studio", r"E:\DG Voice Studio"))
+            may = gc.MayDocVoxCPM(self.cd.get("thu_muc_studio") or None)
             if self._studio_tat() or (not may.co_san() and not may.trang_thai().get("loaded")):
                 raise gc.LoiClone("Chuẩn cao (GPU) cần DG Voice Studio (máy đọc VoxCPM2) trên máy này. Chọn Máy "
                                   "đọc: Nhẹ (mọi máy).")
@@ -3342,12 +3343,16 @@ class App(tk.Tk):
         # 3. Giọng clone
         f_cl = ttk.LabelFrame(khung, text=" Giọng clone: chế độ Chuẩn cao (GPU) dùng DG Voice Studio ở thư mục này ", padding=10)
         f_cl.pack(fill="x", pady=(0, 10))
-        var_studio = tk.StringVar(value=self.cd.get("thu_muc_studio", r"E:\DG Voice Studio"))
+        var_studio = tk.StringVar(value=self.cd.get("thu_muc_studio") or gc.thu_muc_studio_mac_dinh())
         hang_st = ttk.Frame(f_cl)
         hang_st.pack(fill="x", pady=(0, 4))
         ttk.Entry(hang_st, textvariable=var_studio).pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(hang_st, text="Duyệt...", command=lambda: var_studio.set(
-            os.path.abspath(filedialog.askdirectory(initialdir=var_studio.get()) or var_studio.get()))).pack(side="right")
+
+        def duyet_studio():
+            d = filedialog.askdirectory(initialdir=var_studio.get() or None)
+            if d:                                   # bấm Huỷ thì giữ ô như cũ
+                var_studio.set(os.path.abspath(d))
+        ttk.Button(hang_st, text="Duyệt...", command=duyet_studio).pack(side="right")
         var_kiem = tk.BooleanVar(value=self.cd.get("kiem_whisper", True))
         ttk.Checkbutton(f_cl, text="Kiểm lại từng câu bằng whisper, đọc lệch thì tự đọc lại câu đó",
                         variable=var_kiem).pack(anchor="w")
@@ -3397,7 +3402,10 @@ class App(tk.Tk):
             self.cd["xuat_chapters"] = var_chapters.get()
             self.cd["tu_cuon"] = var_cuon.get()
             self.cd["tu_kiem_cap_nhat"] = var_upd.get()
-            self.cd["thu_muc_studio"] = var_studio.get().strip() or r"E:\DG Voice Studio"
+            if var_studio.get().strip():
+                self.cd["thu_muc_studio"] = var_studio.get().strip()
+            else:
+                self.cd.pop("thu_muc_studio", None)       # để trống: tự tìm DG Voice Studio mỗi lần mở
             self.cd["kiem_whisper"] = var_kiem.get()
             self.cd["xuat_wav"] = var_wav.get()
             self.cd["nghe_ngay"] = var_nghe.get()

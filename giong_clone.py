@@ -549,7 +549,7 @@ def chia_cum_srt(chu, rong=SRT_DONG, so_dong=SRT_SO_DONG):
     n = max(2, -(-len(chu) // (rong * so_dong - 6)))
     while n <= len(tu):
         dich = len(" ".join(tu)) / n
-        cum, hien, ok = [], [], True
+        cum, hien = [], []
         for i, t in enumerate(tu):
             thu = " ".join(hien + [t])
             con_lai = n - len(cum) - 1
@@ -725,13 +725,61 @@ class LoiClone(RuntimeError):
     pass
 
 
+# Thư mục DG Voice Studio (máy đọc Chuẩn cao) và python của VoxCPM không ghi cứng trong mã: lấy từ Cài đặt,
+# config.json của Studio, biến môi trường, hoặc tự tìm ở gốc các ổ cố định.
+TEN_STUDIO = "DG Voice Studio"
+_STUDIO_DA_DO = []
+
+
+def _o_dia_co_dinh():
+    """Gốc các ổ cố định; bỏ ổ mạng, ổ CD để không treo khi ổ mạng mất kết nối."""
+    try:
+        import ctypes
+        loai = ctypes.windll.kernel32.GetDriveTypeW
+        return [o for o in os.listdrives() if loai(o) == 3]      # 3 = DRIVE_FIXED
+    except Exception:
+        return []
+
+
+def thu_muc_studio_mac_dinh():
+    """Biến DOCVOICE_STUDIO, rồi thư mục "DG Voice Studio" có voice_daemon.py ở gốc một ổ cố định. Không thấy thì
+    trả "" (chế độ Chuẩn cao báo thiếu, chế độ Nhẹ vẫn chạy). Kết quả dò ổ nhớ cho cả phiên."""
+    d = os.environ.get("DOCVOICE_STUDIO", "").strip()
+    if d:
+        return d
+    if not _STUDIO_DA_DO:
+        thay = ""
+        for o in _o_dia_co_dinh():
+            ung_vien = os.path.join(o, TEN_STUDIO)
+            if os.path.isfile(os.path.join(ung_vien, "voice_daemon.py")):
+                thay = ung_vien
+                break
+        _STUDIO_DA_DO.append(thay)
+    return _STUDIO_DA_DO[0]
+
+
+def python_voxcpm(cfg):
+    """Python có VoxCPM: khoá voxcpm_python trong config.json của DG Voice Studio, rồi biến DOCVOICE_VOXCPM_PYTHON."""
+    return str(cfg.get("voxcpm_python") or os.environ.get("DOCVOICE_VOXCPM_PYTHON", "")).strip()
+
+
+def _loi_thieu_python_voxcpm(py):
+    return LoiClone(f"Không thấy python của VoxCPM ({py or 'chưa đặt'}). Thêm voxcpm_python vào config.json của "
+                    "DG Voice Studio hoặc đặt biến môi trường DOCVOICE_VOXCPM_PYTHON.")
+
+
+LOI_THIEU_STUDIO = "Chưa thấy thư mục DG Voice Studio: vào Cài đặt chọn thư mục, hoặc đặt biến DOCVOICE_STUDIO."
+
+
 class MayDocVoxCPM:
     """Gọi máy đọc nóng của DG Voice Studio. Chưa nóng thì bật nó (ẩn, CREATE_NO_WINDOW)."""
 
-    def __init__(self, thu_muc_studio=r"E:\DG Voice Studio"):
-        self.studio = thu_muc_studio
+    def __init__(self, thu_muc_studio=None):
+        self.studio = thu_muc_studio or thu_muc_studio_mac_dinh()
 
     def _cfg(self):
+        if not self.studio:
+            return {}
         try:
             with open(os.path.join(self.studio, "config.json"), encoding="utf-8") as f:
                 return json.load(f)
@@ -740,6 +788,8 @@ class MayDocVoxCPM:
 
     def cong(self):
         try:
+            if not self.studio:
+                raise OSError("chưa có thư mục DG Voice Studio")
             with open(os.path.join(self.studio, ".daemon.json"), encoding="utf-8") as f:
                 return int(json.load(f).get("port"))
         except (OSError, ValueError, TypeError):
@@ -766,16 +816,18 @@ class MayDocVoxCPM:
         return r if r.get("app") == "dg-voice-daemon" else {"running": False, "error": r.get("error")}
 
     def co_san(self):
-        return os.path.isfile(os.path.join(self.studio, "voice_daemon.py"))
+        return bool(self.studio) and os.path.isfile(os.path.join(self.studio, "voice_daemon.py"))
 
     def bat(self, cho_toi_da=900, bao=None):
         st = self.trang_thai()
         if st.get("loaded"):
             return st
         if not st.get("app"):
-            py = self._cfg().get("voxcpm_python") or r"E:\MONEY X3\telegram-launch-bot\.venv-voxcpm\Scripts\python.exe"
+            if not self.studio:
+                raise LoiClone(LOI_THIEU_STUDIO)
+            py = python_voxcpm(self._cfg())
             if not os.path.isfile(py):
-                raise LoiClone(f"Không thấy python của VoxCPM: {py}")
+                raise _loi_thieu_python_voxcpm(py)
             nhat_ky = open(os.path.join(self.studio, "daemon.log"), "a", encoding="utf-8")
             subprocess.Popen([py, os.path.join(self.studio, "voice_daemon.py")], cwd=self.studio,
                              stdout=nhat_ky, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -788,7 +840,7 @@ class MayDocVoxCPM:
             if bao:
                 bao(f"Đang nạp máy đọc giọng clone ({int(time.time() - bat_dau)} giây)...")
             time.sleep(3)
-        raise LoiClone("Máy đọc giọng clone không lên sau 15 phút, xem E:\\DG Voice Studio\\daemon.log")
+        raise LoiClone("Máy đọc giọng clone không lên sau 15 phút, xem " + os.path.join(self.studio, "daemon.log"))
 
     ten = "Chuẩn cao (GPU)"
     khung = KHUNG_MAY_DOC
@@ -855,7 +907,7 @@ class MayDocGPURieng(MayDocVoxCPM):
 
     ten = "Chuẩn cao (GPU)"
 
-    def __init__(self, thu_muc_studio=r"E:\DG Voice Studio", buoc=None, optimize=False):
+    def __init__(self, thu_muc_studio=None, buoc=None, optimize=False):
         super().__init__(thu_muc_studio)
         self.buoc = buoc
         self.optimize = optimize
@@ -864,7 +916,9 @@ class MayDocGPURieng(MayDocVoxCPM):
         self._khoa = threading.Lock()
 
     def _duong_model(self):
-        goc = self._cfg().get("dg_root") or r"E:\DG Media Holding AI Mascot Building Map"
+        goc = self._cfg().get("dg_root") or ""
+        if not goc:
+            return "", ""
         return (os.path.join(goc, "voice-bank", "local-models", "VoxCPM2-fp16"),
                 os.path.join(goc, "voice-bank", "local-cache"))
 
@@ -878,9 +932,9 @@ class MayDocGPURieng(MayDocVoxCPM):
         with self._khoa:
             if self.tt is not None and self.tt.poll() is None:
                 return self.trang_thai()
-            py = self._cfg().get("voxcpm_python") or r"E:\MONEY X3\telegram-launch-bot\.venv-voxcpm\Scripts\python.exe"
+            py = python_voxcpm(self._cfg())
             if not os.path.isfile(py):
-                raise LoiClone(f"Không thấy python của VoxCPM: {py}")
+                raise _loi_thieu_python_voxcpm(py)
             model, cache = self._duong_model()
             if bao:
                 bao("Đang nạp máy đọc GPU riêng (VoxCPM2, khoảng 1 đến 5 phút lần đầu)...")
@@ -939,8 +993,8 @@ class MayDocRieng:
     nóng suốt phiên app, cache mẫu giọng một lần cho cả bài. Chết thì tự bật lại và gửi lại câu đang
     dở. Không dùng voice_daemon.py dùng chung của DG Voice Studio, không mở cổng mạng."""
 
-    def __init__(self, thu_muc_studio=r"E:\DG Voice Studio", thu_muc_log=None, cho_nap=CHO_NAP_TOI_DA):
-        self.studio = thu_muc_studio
+    def __init__(self, thu_muc_studio=None, thu_muc_log=None, cho_nap=CHO_NAP_TOI_DA):
+        self.studio = thu_muc_studio or thu_muc_studio_mac_dinh()
         self.thu_muc_log = thu_muc_log or os.path.join(os.environ.get("TEMP", "."), "DocVoice")
         self.cho_nap = cho_nap
         self.p = None
@@ -952,6 +1006,8 @@ class MayDocRieng:
 
     # cấu hình lấy từ DG Voice Studio config.json (dg_root, voxcpm_python), không ghi gì vào đó
     def _cfg(self):
+        if not self.studio:
+            return {}
         try:
             with open(os.path.join(self.studio, "config.json"), encoding="utf-8") as f:
                 return json.load(f)
@@ -959,10 +1015,12 @@ class MayDocRieng:
             return {}
 
     def python(self):
-        return self._cfg().get("voxcpm_python") or r"E:\MONEY X3\telegram-launch-bot\.venv-voxcpm\Scripts\python.exe"
+        return python_voxcpm(self._cfg())
 
     def goc_model(self):
-        goc = self._cfg().get("dg_root") or r"E:\DG Media Holding AI Mascot Building Map"
+        goc = self._cfg().get("dg_root") or ""
+        if not goc:
+            return ""
         return os.path.join(goc, "voice-bank", "local-models", "VoxCPM2-fp16")
 
     def ma_may(self):
@@ -1019,8 +1077,10 @@ class MayDocRieng:
             if self.song and self.thong_tin.get("san_sang"):
                 return self.thong_tin
             if not self.co_san():
-                raise LoiClone("Thiếu máy đọc giọng clone: cần venv VoxCPM (" + self.python() + ") và model "
-                               "VoxCPM2-fp16 (" + self.goc_model() + "). Vào Cài đặt chọn đúng thư mục DG Voice Studio.")
+                raise LoiClone("Thiếu máy đọc giọng clone: cần venv VoxCPM (" + (self.python() or "chưa đặt voxcpm_python "
+                               "trong config.json của DG Voice Studio hay biến DOCVOICE_VOXCPM_PYTHON") + ") và model "
+                               "VoxCPM2-fp16 (" + (self.goc_model() or "chưa có dg_root trong config.json") + "). Vào Cài "
+                               "đặt chọn đúng thư mục DG Voice Studio.")
             if not self.song:
                 self._bat_tien_trinh()
             cho = cho_toi_da or self.cho_nap
@@ -1101,18 +1161,20 @@ class MayDocRieng:
 _MAY_CHUNG = {}
 
 
-def may_doc_chung(thu_muc_studio=r"E:\DG Voice Studio", thu_muc_log=None):
+def may_doc_chung(thu_muc_studio=None, thu_muc_log=None):
     """Một máy đọc riêng cho cả phiên app, giữ model nóng giữa các lần bấm Chuyển đổi."""
-    k = os.path.abspath(thu_muc_studio)
+    thu_muc_studio = thu_muc_studio or thu_muc_studio_mac_dinh()
+    k = os.path.abspath(thu_muc_studio) if thu_muc_studio else ""
     if k not in _MAY_CHUNG:
         _MAY_CHUNG[k] = MayDocRieng(thu_muc_studio, thu_muc_log)
     return _MAY_CHUNG[k]
 
 
-def chon_may_doc(thu_muc_studio=r"E:\DG Voice Studio", thu_muc_log=None, chung=None):
+def chon_may_doc(thu_muc_studio=None, thu_muc_log=None, chung=None):
     """Chọn máy đọc theo luật một VoxCPM2 trên GPU một lúc: máy đọc riêng đang sống thì dùng tiếp; daemon
     dùng chung của DG Voice Studio đang chạy (đã nạp hay đang nạp, ví dụ Kobo Studio vừa bật) thì đi qua
     nó, không nạp model thứ hai; còn lại dùng máy đọc riêng (nhanh hơn), thiếu venv hay model thì daemon."""
+    thu_muc_studio = thu_muc_studio or thu_muc_studio_mac_dinh()
     rieng = may_doc_chung(thu_muc_studio, thu_muc_log)
     if rieng.song:
         return rieng
@@ -1133,7 +1195,7 @@ _MA_DOC_TRUOC = r'''
 def doc_truoc_model(ten):
     """Đọc trước model.bin bằng khối 16 MB cho file vào bộ đệm hệ điều hành, rồi mới nạp. ctranslate2 tự đọc theo
     khối nhỏ: trên ổ HDD đang bận, mỗi khối phải xếp hàng nên chỉ còn khoảng 0,1 MB/s (model small 483 MB mất
-    cả giờ, NV-1299); khối lớn trên cùng ổ vẫn khoảng 44 MB/s. Chưa có model trong bộ nhớ đệm thì bỏ qua (sẽ tải)."""
+    cả giờ); khối lớn trên cùng ổ vẫn khoảng 44 MB/s. Chưa có model trong bộ nhớ đệm thì bỏ qua (sẽ tải)."""
     try:
         import os
         if os.path.isdir(ten):
@@ -1249,7 +1311,7 @@ def tim_ffmpeg():
         return p
     goc = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     for thu in (os.path.join(goc, "DocVoice", "may_nhe", "ffmpeg", "ffmpeg.exe"),   # máy đọc nhẹ tự tải
-                r"C:\ffmpeg\bin\ffmpeg.exe", r"E:\ffmpeg\bin\ffmpeg.exe"):
+                r"C:\ffmpeg\bin\ffmpeg.exe"):
         if os.path.isfile(thu):
             return thu
     return ""
@@ -1641,7 +1703,8 @@ def main(argv=None):
     ap.add_argument("--khong-kiem", action="store_true")
     ap.add_argument("--python-kiem", default="")
     ap.add_argument("--nhat-ky", default="")
-    ap.add_argument("--studio", default=r"E:\DG Voice Studio")
+    ap.add_argument("--studio", default=None,
+                    help="thư mục DG Voice Studio (mặc định: biến DOCVOICE_STUDIO hoặc tự tìm ở gốc các ổ)")
     ap.add_argument("--may", default="gpu", choices=["gpu", "nhe", "tu_dong", "rieng", "chung"],
                     help="nhe = Edge + OpenVoice trên CPU (mọi máy); gpu = VoxCPM2 qua DG Voice Studio; "
                          "tu_dong, rieng, chung: chọn máy đọc GPU (daemon chung hay máy đọc riêng)")
