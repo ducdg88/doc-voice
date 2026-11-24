@@ -135,7 +135,7 @@ FILE_CAI_DAT = os.path.join(GOC, "cai_dat.json")
 DO_DAI_DOAN = 2500  # ký tự mỗi lượt gửi máy chủ
 SO_LAN_THU = 4
 SONG_SONG = 3  # số đoạn gửi máy chủ cùng lúc
-PHIEN_BAN = "1.6.1"
+PHIEN_BAN = "1.7.0"
 KHO_GITHUB = "ducdg88/doc-voice"
 TEN_EXE = "DocVoice.exe"
 LINK_TAI_HOP_LE = f"https://github.com/{KHO_GITHUB}/releases/download/"
@@ -153,9 +153,18 @@ TOI_DA_PAUSE = 10.0  # giây, trần cho mỗi chỉ dẫn [nghỉ ...] để kh
 TEN_NGON_NGU = {
     "vi-VN": "Tiếng Việt", "en-US": "English (US)", "en-GB": "English (UK)",
     "en-AU": "English (Australia)", "en-CA": "English (Canada)", "en-IN": "English (India)",
-    "fr-FR": "Français", "de-DE": "Deutsch", "es-ES": "Español", "ja-JP": "日本語",
+    "fr-FR": "Français", "de-DE": "Deutsch", "ja-JP": "日本語",
     "ko-KR": "한국어", "zh-CN": "中文 (简体)", "zh-TW": "中文 (繁體)", "th-TH": "ไทย",
-    "pt-BR": "Português (BR)", "it-IT": "Italiano", "ru-RU": "Русский",
+    "pt-BR": "Português (BR)", "pt-PT": "Português (PT)", "it-IT": "Italiano", "ru-RU": "Русский",
+    # Tiếng Tây Ban Nha theo vùng (phát âm khác nhau: España đọc c/z thành "th"; Mỹ Latinh đọc thành "s")
+    "es-ES": "Español (España · Tây Ban Nha)", "es-MX": "Español (México)",
+    "es-US": "Español (EE.UU. · Mỹ Latinh)", "es-AR": "Español (Argentina)",
+    "es-CO": "Español (Colombia)", "es-CL": "Español (Chile)", "es-PE": "Español (Perú)",
+    "es-VE": "Español (Venezuela)", "es-EC": "Español (Ecuador)", "es-GT": "Español (Guatemala)",
+    "es-CU": "Español (Cuba)", "es-DO": "Español (Rep. Dominicana)", "es-BO": "Español (Bolivia)",
+    "es-CR": "Español (Costa Rica)", "es-HN": "Español (Honduras)", "es-NI": "Español (Nicaragua)",
+    "es-PA": "Español (Panamá)", "es-PY": "Español (Paraguay)", "es-PR": "Español (Puerto Rico)",
+    "es-SV": "Español (El Salvador)", "es-UY": "Español (Uruguay)", "es-GQ": "Español (G. Ecuatorial)",
     "clone": "★ Giọng clone (máy này)",
 }
 MA_CLONE = "clone"
@@ -1567,6 +1576,8 @@ class App(tk.Tk):
                 pass
         self._khoa_trang_thai = threading.Lock()
         self.dang_chay = False
+        self._dang_song = True             # False khi đang đóng app: chặn luồng nền gọi Tk đã bị huỷ (tránh crash)
+        self._luong_sinh = None            # luồng sinh giọng đang chạy (để đóng app chờ nó dừng gọn)
         self.file_cuoi = None
         self._ban_moi_cho = None
         self._danh_sach_cau = []
@@ -1827,12 +1838,12 @@ class App(tk.Tk):
             moi = not self.giong
             self.giong = ds
             if moi:
-                self.after(0, self._nap_ngon_ngu)
+                self._an_toan_after(0, self._nap_ngon_ngu)
             if not getattr(self, "_gioi_thieu_clone", False):
-                self.after(0, lambda: self.trang_thai.set(
+                self._an_toan_after(0, lambda: self.trang_thai.set(
                     f"Đã tải {len(ds)} giọng từ máy chủ." + ("" if gc.ds_giong() else " " + HUONG_DAN_NHAP_GIONG)))
         except Exception as e:
-            self.after(0, lambda e=e: self.trang_thai.set(f"Không tải được danh sách giọng: {e}"))
+            self._an_toan_after(0, lambda e=e: self.trang_thai.set(f"Không tải được danh sách giọng: {e}"))
 
     def _nguoi_dung_doi(self, ham):
         self._nguoi_dung_da_chon = True
@@ -1876,14 +1887,16 @@ class App(tk.Tk):
             self._lam_nong()
             return
         ds = [v for v in self.giong if v["Locale"] == loc]
-        cl = gc.ds_giong() if loc.lower().startswith("en") else {}
+        # Giọng clone hiện ở MỌI ngôn ngữ (không chỉ tiếng Anh): chọn một giọng clone dưới locale này thì máy đọc
+        # dùng giọng nguồn Edge bản địa của locale đó, để đọc chuẩn phát âm ngôn ngữ đó (ví dụ giọng clone đọc es-ES).
+        cl = gc.ds_giong()
         self._ds_giong = [gc.TIEN_TO_CLONE + slug for slug in cl] + [v["ShortName"] for v in ds]
         self.chon_giong["values"] = ([f"★ {v['ten']} · {v.get('gioi', '')}" for v in cl.values()]
                                      + [ten_hien_thi(v) for v in ds])
         luu = giong_chon or self.cd.get("giong")
         if luu in self._ds_giong:
             self.chon_giong.current(self._ds_giong.index(luu))
-        elif self._ds_giong and self._ds_giong[0].startswith(gc.TIEN_TO_CLONE):
+        elif loc.lower().startswith("en") and self._ds_giong and self._ds_giong[0].startswith(gc.TIEN_TO_CLONE):
             self.chon_giong.current(0)       # tiếng Anh: Arthur đứng đầu và là giọng mặc định
         else:
             multi = [i for i, v in enumerate(ds) if "Multilingual" in v["ShortName"]]
@@ -1893,6 +1906,31 @@ class App(tk.Tk):
     def _la_clone(self):
         ds = getattr(self, "_ds_giong", None)
         return bool(ds) and ds[self.chon_giong.current()].startswith(gc.TIEN_TO_CLONE)
+
+    def _ngon_ngu_doc_clone(self, slug):
+        """Ngôn ngữ (locale) để đọc một giọng clone: nếu ô Ngôn ngữ đang chọn một locale cụ thể (es-ES, fr-FR...)
+        thì theo locale đó; nếu đang ở nhóm ★ Giọng clone thì theo locale của chính giọng (voice.json)."""
+        try:
+            loc = self._locales[self.ngon_ngu.current()]
+        except Exception:
+            loc = MA_CLONE
+        if loc != MA_CLONE:
+            return loc
+        tt = gc.ds_giong().get(slug) or {}
+        return tt.get("locale") or "en-US"
+
+    def _giong_nguon_edge(self, loc):
+        """Giọng nguồn Edge bản địa cho locale: giọng Male neural trong danh sách Edge sống, rồi map cố định,
+        rồi Christopher (tiếng Anh). Chạy ở luồng chính (đọc self.giong)."""
+        if loc.lower().startswith("en"):
+            return mn.GIONG_EDGE_NGUON
+        ds = [v for v in (self.giong or []) if v.get("Locale") == loc]
+        nam = [v for v in ds if (v.get("Gender") or "").lower() == "male"]
+        if nam:
+            return nam[0]["ShortName"]
+        if ds:
+            return ds[0]["ShortName"]
+        return mn.GIONG_NGUON_THEO_NGON_NGU.get(loc.split("-")[0].lower(), mn.GIONG_EDGE_NGUON)
 
     def _cap_nhat_cam_xuc(self):
         """Mức cảm xúc chỉ bật cho giọng clone (giọng Edge không có tham số này)."""
@@ -2296,7 +2334,7 @@ class App(tk.Tk):
                     ghi_json(FILE_BO_DEM_DICH, self._bo_dem_dich)
                 except OSError:
                     pass
-            self.after(0, xong)
+            self._an_toan_after(0, xong)
         threading.Thread(target=lam, daemon=True).start()
 
     def _ve_ban_dich(self, txt, ma, cau):
@@ -2367,7 +2405,7 @@ class App(tk.Tk):
                     self.nut_dich.config(text="Dịch sang tiếng Việt")
                     self.nut_dich.state(["!disabled"])
                     self._luu_cai_dat()
-                self.after(0, cap_nhat)
+                self._an_toan_after(0, cap_nhat)
             except Exception as e:
                 err_msg = str(e)
                 def bao_loi(msg=err_msg):
@@ -2375,7 +2413,7 @@ class App(tk.Tk):
                     self.nut_dich.config(text="Dịch sang tiếng Việt")
                     self.nut_dich.state(["!disabled"])
                     messagebox.showerror("Đọc Voice", f"Không dịch được:\n{msg}")
-                self.after(0, bao_loi)
+                self._an_toan_after(0, bao_loi)
 
         threading.Thread(target=lam, daemon=True).start()
 
@@ -2461,7 +2499,7 @@ class App(tk.Tk):
 
     # --- nghe ngay khi máy còn đang sinh (giọng clone): phát từng câu xong, hết câu phát câu kế ---
     def _co_phan_moi(self, i, thong_tin):
-        self.after(0, self._nhan_phan, i, thong_tin)
+        self._an_toan_after(0, self._nhan_phan, i, thong_tin)
 
     def _nhan_phan(self, i, tt):
         if not getattr(self, "_nghe_ngay", False):
@@ -2788,8 +2826,13 @@ class App(tk.Tk):
             self._hen_nhip = self.after(int(GIAY_NHIP_TIEN_DO * 1000), self._nhip_tien_do)
         if giong.startswith(gc.TIEN_TO_CLONE):
             self._dung_clone.clear()
-            threading.Thread(target=self._lam_clone, args=(van_ban, td, duong_ra, giong, nghe_thu, luong, bat_dau),
-                             daemon=True).start()
+            slug = giong[len(gc.TIEN_TO_CLONE):]
+            loc_nguon = self._ngon_ngu_doc_clone(slug)            # tính trên luồng chính (đọc Tk)
+            gn = self._giong_nguon_edge(loc_nguon)
+            self._luong_sinh = threading.Thread(
+                target=self._lam_clone,
+                args=(van_ban, td, duong_ra, giong, nghe_thu, luong, bat_dau, loc_nguon, gn), daemon=True)
+            self._luong_sinh.start()
             return
         van_ban_dich = self.o_dich.get("1.0", "end").strip() if hasattr(self, "o_dich") else ""
         self._canh_bao_pause = []
@@ -2797,18 +2840,21 @@ class App(tk.Tk):
         if self._canh_bao_pause:
             self.trang_thai.set(f"Lưu ý: {len(self._canh_bao_pause)} khoảng nghỉ vượt {TOI_DA_PAUSE:g} giây "
                                 f"đã rút còn {TOI_DA_PAUSE:g} giây.")
-        threading.Thread(target=self._lam,
-                         args=(khoi_list, van_ban_goc, van_ban_dich, duong_ra, giong, toc, cao, nghe_thu, td),
-                         daemon=True).start()
+        self._luong_sinh = threading.Thread(
+            target=self._lam,
+            args=(khoi_list, van_ban_goc, van_ban_dich, duong_ra, giong, toc, cao, nghe_thu, td), daemon=True)
+        self._luong_sinh.start()
 
     def _dung_chuyen(self):
         if self.dang_chay and self._la_clone():
             self._dung_clone.set()
             self.trang_thai.set("Sẽ dừng sau câu đang đọc. Bấm Chuyển đổi lại cùng văn bản để chạy tiếp.")
 
-    def _lam_clone(self, van_ban, td, duong_ra, giong, nghe_thu, luong=False, bat_dau=0):
+    def _lam_clone(self, van_ban, td, duong_ra, giong, nghe_thu, luong=False, bat_dau=0,
+                   ngon_ngu="en-US", giong_nguon=None):
         """Đọc bằng giọng clone: từng câu qua máy đọc, lưu tạm để chạy tiếp, ghép, chuẩn âm lượng.
-        luong=True: phát ngay câu đầu tiên trong lúc sinh tiếp phía sau, đọc xong tự xuất mp3 + srt."""
+        luong=True: phát ngay câu đầu tiên trong lúc sinh tiếp phía sau, đọc xong tự xuất mp3 + srt.
+        ngon_ngu, giong_nguon: đọc chuẩn phát âm ngôn ngữ bản địa (giọng nguồn Edge theo locale)."""
         slug = giong[len(gc.TIEN_TO_CLONE):]
         muc = self.cam_xuc.get() or gc.MUC_MAC_DINH
         kiem = None
@@ -2822,15 +2868,16 @@ class App(tk.Tk):
             so_tu = len(van_ban.split())
             phut = phut_moi_1000_tu(may.ten) * so_tu / 1000
             canh_bao = canh_bao_may_yeu(may.ten)
-            self.after(0, self._bao, f"Giọng {slug.title()} · {may.ten}: {so_tu} từ, ước khoảng {max(1, round(phut))} phút..."
+            self._an_toan_after(0, self._bao, f"Giọng {slug.title()} · {may.ten}: {so_tu} từ, ước khoảng {max(1, round(phut))} phút..."
                        + (f" {canh_bao}" if canh_bao else ""), 0)
             if self.cd.get("kiem_whisper", True) and not nghe_thu and not luong:
-                self.after(0, self._bao, "Đang bật bộ kiểm đọc (whisper)...", 0)
+                self._an_toan_after(0, self._bao, "Đang bật bộ kiểm đọc (whisper)...", 0)
                 py = gc.tim_python_whisper(self.cd.get("python_kiem", ""))
                 kiem = gc.KiemDoc(py, THU_MUC_CLONE_TAM) if py else None
             toc = gc.MUC_CAM_XUC.get(muc, {}).get("toc", 1.0) * (1 + self.toc_do.get() / 100.0)
-            bao_sinh = (lambda c, pt: None) if luong else (lambda c, pt: self.after(0, self._bao, c, pt))
-            doc = gc.DocDaiClone(THU_MUC_CLONE_TAM, may, kiem, bao=bao_sinh, dung=self._dung_clone)
+            bao_sinh = (lambda c, pt: None) if luong else (lambda c, pt: self._an_toan_after(0, self._bao, c, pt))
+            doc = gc.DocDaiClone(THU_MUC_CLONE_TAM, may, kiem, bao=bao_sinh, dung=self._dung_clone,
+                                 ngon_ngu=ngon_ngu, giong_nguon=giong_nguon)
             phat_cb = None
             if luong:
                 self._doc_luong = doc
@@ -2842,16 +2889,16 @@ class App(tk.Tk):
                         return
                     im = bool(os.environ.get("DOCVOICE_IM")) and che_do_thu()   # tự thử: đo đúng nhịp, không phát ra loa
                     p = pl.PhatLuong(len(kw["phan"]), self._lay_phan_luong, im_lang=im,
-                                     khi_doi_phan=lambda i: self.after(0, self._khi_doi_phan_luong, i),
+                                     khi_doi_phan=lambda i: self._an_toan_after(0, self._khi_doi_phan_luong, i),
                                      do_rtf=lambda doc=doc: self._rtf(doc),
-                                     khi_dem=lambda dang: self.after(0, self._khi_dem_luong, dang))
-                    p.khi_het = lambda p=p: self.after(0, self._het_luong, p)
+                                     khi_dem=lambda dang: self._an_toan_after(0, self._khi_dem_luong, dang))
+                    p.khi_het = lambda p=p: self._an_toan_after(0, self._het_luong, p)
                     self._phat_luong = p
                     self._vi_tri_phan = None
-                    self.after(0, lambda ph=kw["phan"]: setattr(self, "_vi_tri_phan", self._tim_vi_tri_phan(ph)))
+                    self._an_toan_after(0, lambda ph=kw["phan"]: setattr(self, "_vi_tri_phan", self._tim_vi_tri_phan(ph)))
                     p.phat_tu(bat_dau)
                 phat_cb = _phat_cb
-                self.after(0, self._bao, f"{may.ten}: đang đọc câu đầu, sắp có tiếng...", 0)
+                self._an_toan_after(0, self._bao, f"{may.ten}: đang đọc câu đầu, sắp có tiếng...", 0)
             wav_ra = os.path.splitext(duong_ra)[0] + ".wav" if (self.cd.get("xuat_wav") and not nghe_thu) else ""
 
             def chay_doc(bd=bat_dau, ph=phat_cb):
@@ -2866,7 +2913,7 @@ class App(tk.Tk):
                 with open(os.path.splitext(duong_ra)[0] + ".chapters.txt", "w", encoding="utf-8") as f:
                     f.write(chapters_youtube(self._chuong_luot, kq["muc_tg"]) + "\n")
             if kq.get("dung"):
-                self.after(0, self._bao, f"Đã dừng ở {kq['xong']}/{kq['tong']} câu. Bấm Chuyển đổi lại "
+                self._an_toan_after(0, self._bao, f"Đã dừng ở {kq['xong']}/{kq['tong']} câu. Bấm Chuyển đổi lại "
                                          "cùng văn bản và cùng mức cảm xúc để chạy tiếp.", kq["xong"] / kq["tong"] * 95)
                 ket = {"ok": False, "dung": True, **kq}
                 return
@@ -2879,13 +2926,13 @@ class App(tk.Tk):
             if luong:
                 self._file_luong = duong_ra
                 if getattr(self, "_phat_luong", None) is None:
-                    self.after(0, self._bao, f"Đã xuất sẵn: {duong_ra}", 100)
+                    self._an_toan_after(0, self._bao, f"Đã xuất sẵn: {duong_ra}", 100)
             else:
-                self.after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}", 100)
+                self._an_toan_after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}", 100)
                 if not nghe_thu:
-                    self.after(0, lambda: self._thong_bao_ket_qua(duong_ra))
+                    self._an_toan_after(0, lambda: self._thong_bao_ket_qua(duong_ra))
             if not self._tu_dong and not luong:
-                self.after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))
+                self._an_toan_after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))
             ket = {"ok": True, "mp3": duong_ra, "srt": kq.get("srt"), "giay": kq.get("giay"),
                    "tong": kq.get("tong"), "wer_tb_tung_phan": kq.get("wer_tb_tung_phan"),
                    "may_doc": may.ten, "giay_chay": round(time.time() - t_bat_dau, 1),
@@ -2893,15 +2940,15 @@ class App(tk.Tk):
                    "chapters": os.path.splitext(duong_ra)[0] + ".chapters.txt" if getattr(self, "_chuong_luot", None) else ""}
         except Exception as e:
             ket = {"ok": False, "loi": str(e)}
-            self.after(0, self._bao, f"Lỗi: {e}", 0)
+            self._an_toan_after(0, self._bao, f"Lỗi: {e}", 0)
             if not self._tu_dong:
-                self.after(0, lambda e=e: messagebox.showerror("Đọc Voice", f"Không chuyển được giọng clone:\n{e}"))
+                self._an_toan_after(0, lambda e=e: messagebox.showerror("Đọc Voice", f"Không chuyển được giọng clone:\n{e}"))
         finally:
             if kiem:
                 kiem.dong()
             self._ket_qua_luot = ket
             self._chuong_luot = None
-            self.after(0, self._xong)
+            self._an_toan_after(0, self._xong)
 
     @staticmethod
     def _rtf(doc):
@@ -2950,11 +2997,11 @@ class App(tk.Tk):
     def _cai_may_nhe(self):
         def bao(viec, da, tong):
             pt = da / tong * 100 if tong else 0
-            self.after(0, self._bao, f"{viec}: {da / 1e6:.0f}/{tong / 1e6:.0f} MB (một lần, tải tiếp được nếu đứt)", pt)
+            self._an_toan_after(0, self._bao, f"{viec}: {da / 1e6:.0f}/{tong / 1e6:.0f} MB (một lần, tải tiếp được nếu đứt)", pt)
         ok = mn.cai_dat(bao=bao, dung=self._dung_clone)
         if not ok:
             raise gc.LoiClone("Đã dừng tải máy đọc nhẹ. Bấm lại để tải tiếp.")
-        self.after(0, self._cap_nhat_nhan_may)
+        self._an_toan_after(0, self._cap_nhat_nhan_may)
 
     def _cap_nhat_nhan_may(self):
         try:
@@ -2980,9 +3027,11 @@ class App(tk.Tk):
 
     def _mo_thu_muc_training(self):
         """Mở thư mục Voice Training để người dùng xem và quản lý các giọng."""
-        os.makedirs(gc.THU_MUC_TRAINING, exist_ok=True)
+        # Mở đúng kho giọng app đọc (gc.THU_MUC_GIONG, bản exe là %APPDATA%\DocVoice\giong_clone).
+        # Không dùng gc.THU_MUC_TRAINING: trong exe nó nằm ở thư mục giải nén tạm, tắt app là mất.
+        os.makedirs(gc.THU_MUC_GIONG, exist_ok=True)
         try:
-            os.startfile(gc.THU_MUC_TRAINING)
+            os.startfile(gc.THU_MUC_GIONG)
         except Exception as e:
             messagebox.showerror("Đọc Voice", f"Không mở được thư mục Voice Training:\n{e}")
 
@@ -3024,7 +3073,7 @@ class App(tk.Tk):
             msg = (f"Đã nạp thành công giọng mới vào Voice Training!\n\n"
                    f"• Tên giọng: {meta['ten']}\n"
                    f"• Mã giọng: {meta['slug']}\n"
-                   f"• Thư mục lưu: {os.path.join(gc.THU_MUC_TRAINING, meta['slug'])}\n\n"
+                   f"• Thư mục lưu: {os.path.join(gc.THU_MUC_GIONG, meta['slug'])}\n\n"
                    f"Giọng đã được nạp vào danh sách và chọn sẵn sàng để đọc!")
             messagebox.showinfo("Nạp Voice Thành Công", msg)
             self.trang_thai.set(f"Đã nạp Voice Training: {meta['ten']}")
@@ -3145,13 +3194,13 @@ class App(tk.Tk):
             chu = "ĐẠT" if bc["dat"] else "KHÔNG ĐẠT: " + "; ".join(bc["ly_do"][:3])
             chua = ("\n" + bc["chua_kiem"][0]) if bc.get("chua_kiem") else ""
             html_bc = bc["bao_cao"][1]
-            self.after(0, self._bao, f"Kiểm chất lượng: {chu}", 100)
-            self.after(0, lambda: messagebox.askyesno(
+            self._an_toan_after(0, self._bao, f"Kiểm chất lượng: {chu}", 100)
+            self._an_toan_after(0, lambda: messagebox.askyesno(
                 "Kiểm chất lượng", f"{chu}{chua}\n\nBáo cáo: {html_bc}\n\nMở báo cáo?") and os.startfile(html_bc))
         except Exception as e:
-            self.after(0, self._bao, f"Không kiểm được: {e}", 0)
+            self._an_toan_after(0, self._bao, f"Không kiểm được: {e}", 0)
         finally:
-            self.after(0, self._xong)
+            self._an_toan_after(0, self._xong)
 
     def _chay_nhieu_kich_ban(self):
         if self.dang_chay:
@@ -3174,7 +3223,7 @@ class App(tk.Tk):
     def _lam_nhieu(self, kb, slug, muc, td):
         try:
             may = self._chon_may_doc()
-            doc = gc.DocDaiClone(THU_MUC_CLONE_TAM, may, None, bao=lambda c, pt: self.after(0, self._bao, c, pt),
+            doc = gc.DocDaiClone(THU_MUC_CLONE_TAM, may, None, bao=lambda c, pt: self._an_toan_after(0, self._bao, c, pt),
                                  dung=self._dung_clone)
 
             def doc_mot(ten, vb):
@@ -3187,13 +3236,13 @@ class App(tk.Tk):
                 return {"mp3": ra, "viec": kq["thu_muc"], "ref": gc.duong_mau(slug), "doc_lai": chay,
                         "kho": os.path.join(THU_MUC_CLONE_TAM, "cau", slug)}
             dong, _, duong = kcl.chay_nhieu(kb, doc_mot, thu_muc_ra=self.thu_muc_ra,
-                                            bao=lambda c: self.after(0, self._bao, c, 0))
+                                            bao=lambda c: self._an_toan_after(0, self._bao, c, 0))
             dat = sum(1 for d in dong if d["dat"])
-            self.after(0, self._bao, f"Chạy nhiều kịch bản xong: {dat}/{len(dong)} ĐẠT. Bảng tổng: {duong}", 100)
+            self._an_toan_after(0, self._bao, f"Chạy nhiều kịch bản xong: {dat}/{len(dong)} ĐẠT. Bảng tổng: {duong}", 100)
         except Exception as e:
-            self.after(0, self._bao, f"Lỗi chạy nhiều kịch bản: {e}", 0)
+            self._an_toan_after(0, self._bao, f"Lỗi chạy nhiều kịch bản: {e}", 0)
         finally:
-            self.after(0, self._xong)
+            self._an_toan_after(0, self._xong)
 
     def _lam(self, khoi_list, van_ban_goc, van_ban_dich, duong_ra, giong, toc, cao, nghe_thu, td):
         self._cue_dong_dich = {}
@@ -3209,9 +3258,9 @@ class App(tk.Tk):
                         danh_sach_muc.append(("text", d))
 
         if not danh_sach_muc:
-            self.after(0, self._bao, "Không có chữ nào để đọc", 0)
-            self.after(0, lambda: messagebox.showwarning("Đọc Voice", "Văn bản không có chữ nào để đọc."))
-            self.after(0, self._xong)
+            self._an_toan_after(0, self._bao, "Không có chữ nào để đọc", 0)
+            self._an_toan_after(0, lambda: messagebox.showwarning("Đọc Voice", "Văn bản không có chữ nào để đọc."))
+            self._an_toan_after(0, self._xong)
             return
 
         xong = [0]
@@ -3228,18 +3277,18 @@ class App(tk.Tk):
                     return (mp3_data, [(0.0, val, "")])
                 else:
                     async with khoa:
-                        self.after(0, lambda d=val: self._highlight_doan_dang_chuyen(d))
+                        self._an_toan_after(0, lambda d=val: self._highlight_doan_dang_chuyen(d))
                         b = await tao_doan(val, giong, toc, cao)
                     xong[0] += 1
-                    self.after(0, self._bao, f"Đã chuyển {xong[0]}/{so_text} đoạn...", xong[0] / so_text * 90)
+                    self._an_toan_after(0, self._bao, f"Đã chuyển {xong[0]}/{so_text} đoạn...", xong[0] / so_text * 90)
                     return b
 
             return await asyncio.gather(*(mot(m) for m in danh_sach_muc))
 
         try:
-            self.after(0, self._bao, f"Đang chuyển {so_text} đoạn kịch bản...", 0)
+            self._an_toan_after(0, self._bao, f"Đang chuyển {so_text} đoạn kịch bản...", 0)
             ket_qua = asyncio.run(tat_ca())
-            self.after(0, self._bao, "Đang xuất mp3 và srt...", 96)
+            self._an_toan_after(0, self._bao, "Đang xuất mp3 và srt...", 96)
             tam = duong_ra + ".part"
             with open(tam, "wb") as f:
                 for b, _ in ket_qua:
@@ -3281,18 +3330,18 @@ class App(tk.Tk):
                        if self._canh_bao_pause else "")
             if canh_bao_vi:
                 ghi_chu += f". {canh_bao_vi[0]}"
-            self.after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}{ghi_chu}", 100)
+            self._an_toan_after(0, self._bao, "Đang phát thử..." if nghe_thu else f"Xong: {duong_ra}{ghi_chu}", 100)
             if not nghe_thu:
-                self.after(0, lambda: self._thong_bao_ket_qua(duong_ra))
+                self._an_toan_after(0, lambda: self._thong_bao_ket_qua(duong_ra))
             self._ket_qua_luot = {"ok": True, "mp3": duong_ra, "so_cau": len(cau_list)}
             if not self._tu_dong or self._tu_dong.get("phat_sau"):
-                self.after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))
+                self._an_toan_after(0, lambda: self._bat_dau_phat(duong_ra, cau_list))
         except Exception as e:
             self._ket_qua_luot = {"ok": False, "loi": str(e)}
-            self.after(0, self._bao, f"Lỗi: {e}", 0)
-            self.after(0, lambda e=e: messagebox.showerror("Đọc Voice", f"Không chuyển được:\n{e}"))
+            self._an_toan_after(0, self._bao, f"Lỗi: {e}", 0)
+            self._an_toan_after(0, lambda e=e: messagebox.showerror("Đọc Voice", f"Không chuyển được:\n{e}"))
         finally:
-            self.after(0, self._xong)
+            self._an_toan_after(0, self._xong)
 
     def _tu_dien(self):
         cua = tk.Toplevel(self)
@@ -3320,7 +3369,7 @@ class App(tk.Tk):
     def _kiem_cap_nhat(self, chu_dong):
         if ban_day_du():
             if chu_dong:
-                self.after(0, lambda: messagebox.showinfo(
+                self._an_toan_after(0, lambda: messagebox.showinfo(
                     "Đọc Voice", f"Đây là bản đầy đủ v{PHIEN_BAN} (có mẫu Arthur cho Chuẩn cao). Bản trên GitHub là bản "
                     "công khai không kèm mẫu, nên bản này không tự cập nhật. Lên bản mới: dựng lại bằng dong-goi.ps1."))
             return
@@ -3328,13 +3377,13 @@ class App(tk.Tk):
             moi = kiem_ban_moi()
         except Exception as e:
             if chu_dong:
-                self.after(0, lambda e=e: messagebox.showwarning("Đọc Voice", f"Không kiểm được bản mới:\n{e}"))
+                self._an_toan_after(0, lambda e=e: messagebox.showwarning("Đọc Voice", f"Không kiểm được bản mới:\n{e}"))
             return
         if not moi:
             if chu_dong:
-                self.after(0, lambda: messagebox.showinfo("Đọc Voice", f"Đang dùng bản mới nhất (v{PHIEN_BAN})."))
+                self._an_toan_after(0, lambda: messagebox.showinfo("Đọc Voice", f"Đang dùng bản mới nhất (v{PHIEN_BAN})."))
             return
-        self.after(0, self._hoi_cap_nhat, *moi)
+        self._an_toan_after(0, self._hoi_cap_nhat, *moi)
 
     def _hoi_cap_nhat(self, ban, asset):
         if not getattr(sys, "frozen", False):
@@ -3356,11 +3405,11 @@ class App(tk.Tk):
         def lam():
             try:
                 thay_exe(asset)
-                self.after(0, self._thoat)
+                self._an_toan_after(0, self._thoat)
             except Exception as e:
-                self.after(0, self._xong)
-                self.after(0, self._bao, f"Cập nhật lỗi: {e}", 0)
-                self.after(0, lambda e=e: messagebox.showerror(
+                self._an_toan_after(0, self._xong)
+                self._an_toan_after(0, self._bao, f"Cập nhật lỗi: {e}", 0)
+                self._an_toan_after(0, lambda e=e: messagebox.showerror(
                     "Đọc Voice", f"Không tự cập nhật được, app cũ vẫn dùng bình thường:\n{e}"
                     f"\n\nTải tay tại github.com/{KHO_GITHUB}/releases"))
         threading.Thread(target=lam, daemon=True).start()
@@ -3693,7 +3742,18 @@ class App(tk.Tk):
             ghi_json(kb["ket_qua"], ket)
         self.destroy()
 
+    def _an_toan_after(self, *a, **k):
+        """self.after nhưng không nổ khi app đang/đã đóng: luồng nền (sinh, phát) gọi Tk sau khi cửa sổ bị huỷ
+        sẽ ném TclError và có thể làm sập cả tiến trình (Tcl_AsyncDelete). Đóng rồi thì bỏ qua, không gọi Tk."""
+        if not getattr(self, "_dang_song", True):
+            return None
+        try:
+            return self.after(*a, **k)
+        except Exception:
+            return None
+
     def destroy(self):
+        self._dang_song = False
         if getattr(self, "_hen_nhip", None):
             try:
                 self.after_cancel(self._hen_nhip)
@@ -3703,10 +3763,16 @@ class App(tk.Tk):
         super().destroy()
 
     def _thoat(self):
+        # Đóng app khi đang đọc: dừng phát và báo luồng sinh dừng TRƯỚC, chờ nó nhả gọn, rồi mới huỷ cửa sổ.
+        # Đặt _dang_song=False để mọi lệnh after còn sót từ luồng nền không gọi vào Tk đã huỷ (tránh crash).
+        self._dang_song = False
         if hasattr(self, "_ds_giong"):
             self._luu_cai_dat()
-        self._dung_phat_app()
         self._dung_clone.set()
+        self._dung_phat_app()
+        lsinh = getattr(self, "_luong_sinh", None)
+        if lsinh is not None and lsinh.is_alive() and lsinh is not threading.current_thread():
+            lsinh.join(timeout=3)     # chờ luồng sinh thấy _dung_clone và dừng (không quá 3 giây)
         gc.dong_tat_ca_may()          # nhả VRAM ngay, không chờ máy đọc tự thoát
         self.destroy()
 

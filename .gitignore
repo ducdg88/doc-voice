@@ -33,3 +33,6 @@ giong_nhung/*
 !giong_nhung/arthur/
 giong_nhung/arthur/*
 !giong_nhung/arthur/se.npy
+!giong_nhung/tay-ban-nha-elevenlabs/
+giong_nhung/tay-ban-nha-elevenlabs/*
+!giong_nhung/tay-ban-nha-elevenlabs/se.npy

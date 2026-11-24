@@ -40,6 +40,43 @@ FFMPEG_ZIP_CO = 171535354
 FFMPEG_ZIP_SHA256 = "6b264b9e6019103f601d98c292bd332fd87acf1c5e941ddff4fb71760fe63432"
 
 GIONG_EDGE_NGUON = "en-US-ChristopherNeural"
+# Giọng nguồn Edge bản địa cho từng ngôn ngữ (2 chữ đầu locale). Máy Nhẹ cho Edge đọc text đúng phát âm
+# ngôn ngữ đó bằng một giọng neural bản địa, rồi OpenVoice đổi chất giọng (timbre) sang giọng clone đích.
+# Giọng đọc tiếng Tây Ban Nha bằng giọng nguồn tiếng Anh sẽ sai phát âm, nên chọn giọng nguồn theo ngôn ngữ.
+# Danh sách Edge sống (App truyền giong_nguon) được ưu tiên; không truyền thì dùng map cố định này.
+GIONG_NGUON_THEO_NGON_NGU = {
+    "en": "en-US-ChristopherNeural", "vi": "vi-VN-NamMinhNeural", "es": "es-ES-AlvaroNeural",
+    "fr": "fr-FR-HenriNeural", "de": "de-DE-ConradNeural", "it": "it-IT-DiegoNeural",
+    "pt": "pt-BR-AntonioNeural", "ru": "ru-RU-DmitryNeural", "ja": "ja-JP-KeitaNeural",
+    "ko": "ko-KR-InJoonNeural", "zh": "zh-CN-YunxiNeural", "th": "th-TH-NiwatNeural",
+    "nl": "nl-NL-MaartenNeural", "pl": "pl-PL-MarekNeural", "id": "id-ID-ArdiNeural",
+    "hi": "hi-IN-MadhurNeural", "ar": "ar-SA-HamedNeural", "tr": "tr-TR-AhmetNeural",
+}
+# Câu mẫu ~20 đến 30 giây để tính dấu giọng nguồn (timbre). Dùng đúng ngôn ngữ của giọng nguồn để phủ đủ
+# âm vị; ngôn ngữ chưa có mẫu riêng thì dùng mẫu tiếng Anh (timbre gần như không phụ thuộc ngôn ngữ).
+MAU_NGUON_MAC_DINH = ("Every forest has a story. Some trees grow for centuries, quietly recording each season in "
+                      "their rings. Others fall early, giving light and space to the young ones below. When we "
+                      "walk among them, we are walking through a living library, written slowly, one year at a time.")
+MAU_NGUON = {
+    "es": ("Cada bosque tiene una historia. Algunos árboles crecen durante siglos, registrando en silencio cada "
+           "estación en sus anillos. Otros caen temprano, dando luz y espacio a los más jóvenes que crecen debajo. "
+           "Cuando caminamos entre ellos, caminamos por una biblioteca viva, escrita despacio, un año a la vez."),
+    "fr": ("Chaque forêt a une histoire. Certains arbres grandissent pendant des siècles, enregistrant en silence "
+           "chaque saison dans leurs anneaux. D'autres tombent tôt, donnant lumière et espace aux plus jeunes qui "
+           "poussent en dessous. Quand nous marchons parmi eux, nous traversons une bibliothèque vivante."),
+    "de": ("Jeder Wald hat eine Geschichte. Manche Bäume wachsen jahrhundertelang und halten still jede Jahreszeit "
+           "in ihren Ringen fest. Andere fallen früh und geben den jungen Bäumen darunter Licht und Raum. Wenn wir "
+           "zwischen ihnen gehen, gehen wir durch eine lebendige Bibliothek, langsam geschrieben."),
+    "it": ("Ogni foresta ha una storia. Alcuni alberi crescono per secoli, registrando in silenzio ogni stagione "
+           "nei loro anelli. Altri cadono presto, dando luce e spazio ai più giovani che crescono sotto di loro. "
+           "Quando camminiamo tra loro, attraversiamo una biblioteca vivente, scritta lentamente."),
+    "pt": ("Cada floresta tem uma história. Algumas árvores crescem por séculos, registrando em silêncio cada "
+           "estação em seus anéis. Outras caem cedo, dando luz e espaço aos mais jovens que crescem abaixo. "
+           "Quando caminhamos entre elas, caminhamos por uma biblioteca viva, escrita devagar."),
+    "vi": ("Mỗi khu rừng đều có một câu chuyện. Có những cây lớn lên hàng trăm năm, lặng lẽ ghi lại từng mùa "
+           "trong vòng gỗ của mình. Có những cây ngã sớm, nhường ánh sáng và khoảng trống cho lớp cây non bên dưới. "
+           "Khi đi giữa rừng, ta đang đi qua một thư viện sống, được viết chậm rãi, mỗi năm một dòng."),
+}
 SR = 22050
 # Mức cảm xúc của máy nhẹ: Edge không nhận lệnh trong ngoặc, nên đổi tốc độ và cao độ
 NHAC_DIEU = {
@@ -335,6 +372,8 @@ class MayDocNhe:
     def __init__(self, so_luong=None):
         self.ss_ref = self.ss_doi = None
         self.se_nguon = None
+        self.giong_nguon = GIONG_EDGE_NGUON   # App đặt theo ngôn ngữ cần đọc (giọng nguồn Edge bản địa)
+        self._se_nguon_map = {}               # tên giọng nguồn -> dấu giọng, tính lười một lần mỗi giọng
         self._se_dich = {}
         self._khoa = threading.Lock()
         self._khoa_bat = threading.Lock()   # nạp trước lúc mở app và bấm Nghe cùng lúc: chỉ nạp một lần
@@ -352,7 +391,8 @@ class MayDocNhe:
             k = (chu, muc)
             if k not in self._truoc:
                 nd = NHAC_DIEU.get(muc, NHAC_DIEU["Kể chuyện"])
-                self._truoc[k] = self._pool.submit(lambda c=chu, n=nd: asyncio.run(_edge(c, GIONG_EDGE_NGUON, n["rate"], n["pitch"])))
+                g = self.giong_nguon or GIONG_EDGE_NGUON
+                self._truoc[k] = self._pool.submit(lambda c=chu, n=nd, g=g: asyncio.run(_edge(c, g, n["rate"], n["pitch"])))
 
     def co_san(self):
         return da_cai()
@@ -387,23 +427,30 @@ class MayDocNhe:
         self.ss_ref = mo("ov_ref.onnx")
         self.ss_doi = mo("ov_doi.onnx")
         self.ffmpeg = tim_ffmpeg()
-        self.se_nguon = self._se_giong_nguon()
+        self.se_nguon = self._se_nguon_cua(GIONG_EDGE_NGUON)   # dấu giọng nguồn mặc định (Christopher)
         return self.trang_thai()
 
     def se(self, am):
         return self.ss_ref.run(None, {**self.ss_ref.trong_so, "spec_t": pho(am).transpose(0, 2, 1)})[0]
 
-    def _se_giong_nguon(self):
-        """Dấu giọng của Christopher: tính một lần từ đoạn đọc mẫu ~25 giây, lưu lại."""
-        p = os.path.join(thu_muc_may_nhe(), f"se_{GIONG_EDGE_NGUON}.npy")
+    def _se_nguon_cua(self, giong):
+        """Dấu giọng nguồn của một giọng Edge (ví dụ Christopher cho tiếng Anh, Alvaro cho tiếng Tây Ban Nha):
+        tính một lần từ đoạn đọc mẫu ~25 giây đúng ngôn ngữ của giọng đó, lưu lại và nhớ trong phiên."""
+        giong = giong or GIONG_EDGE_NGUON
+        if giong in self._se_nguon_map:
+            return self._se_nguon_map[giong]
+        p = os.path.join(thu_muc_may_nhe(), f"se_{giong}.npy")
         if os.path.isfile(p):
-            return np.load(p)
-        mau = ("Every forest has a story. Some trees grow for centuries, quietly recording each season in "
-               "their rings. Others fall early, giving light and space to the young ones below. When we "
-               "walk among them, we are walking through a living library, written slowly, one year at a time.")
-        mp3 = asyncio.run(_edge(mau, GIONG_EDGE_NGUON, "+0%", "+0Hz"))
-        g = self.se(giai_ma(self.ffmpeg, mp3))
-        np.save(p, g)
+            g = np.load(p)
+        else:
+            mau = MAU_NGUON.get(giong.split("-")[0].lower(), MAU_NGUON_MAC_DINH)
+            mp3 = asyncio.run(_edge(mau, giong, "+0%", "+0Hz"))
+            g = self.se(giai_ma(self.ffmpeg, mp3))
+            try:
+                np.save(p, g)
+            except OSError:
+                pass
+        self._se_nguon_map[giong] = g
         return g
 
     def do_giong(self, wav, ref):
@@ -429,17 +476,20 @@ class MayDocNhe:
                 self._se_dich[k] = self.se(giai_ma(self.ffmpeg, ref))
         return self._se_dich[k]
 
-    def doi(self, am, g_dich, tau=TAU):
-        """Đổi chất giọng theo khúc ~20 giây (giữ RAM thấp), mỗi chỗ nối có fade 10 ms hai phía để không click."""
+    def doi(self, am, g_dich, tau=TAU, g_src=None):
+        """Đổi chất giọng theo khúc ~20 giây (giữ RAM thấp), mỗi chỗ nối có fade 10 ms hai phía để không click.
+        g_src: dấu giọng nguồn (mặc định Christopher); đọc ngôn ngữ khác thì truyền giọng nguồn bản địa."""
+        if g_src is None:
+            g_src = self.se_nguon
         khuc = SR * 20
         if len(am) <= khuc * 1.3:
             spec = pho(am)
-            o = self.ss_doi.run(None, {**self.ss_doi.trong_so, "spec": spec, "g_src": self.se_nguon, "g_tgt": g_dich,
+            o = self.ss_doi.run(None, {**self.ss_doi.trong_so, "spec": spec, "g_src": g_src, "g_tgt": g_dich,
                                        "tau": np.array(tau, dtype=np.float32)})[0]
             return o.reshape(-1)
         ra = []
         for i in range(0, len(am), khuc):
-            ra.append(self.doi(am[i:i + khuc], g_dich, tau))
+            ra.append(self.doi(am[i:i + khuc], g_dich, tau, g_src))
         n = int(SR * 0.010)
         for k in range(len(ra)):
             if len(ra[k]) > 2 * n:
@@ -454,6 +504,7 @@ class MayDocNhe:
         import wave
         nd = nhac_dieu_bien_the(NHAC_DIEU.get(muc, NHAC_DIEU["Kể chuyện"]), bien_the)
         chu = re.sub(r"^\s*\([^)]*\)", "", chu).strip()     # bỏ lệnh cảm xúc kiểu VoxCPM nếu có
+        giong = self.giong_nguon or GIONG_EDGE_NGUON
         f = self._truoc.pop((chu, muc), None) if not bien_the else None
         if f is not None and f.cancel():   # còn xếp hàng sau câu khác (vừa nhảy câu): tải thẳng, không chờ
             f = None
@@ -462,10 +513,10 @@ class MayDocNhe:
         except Exception:
             mp3 = None
         if not mp3:
-            mp3 = asyncio.run(_edge(chu, GIONG_EDGE_NGUON, nd["rate"], nd["pitch"]))
+            mp3 = asyncio.run(_edge(chu, giong, nd["rate"], nd["pitch"]))
         with self._khoa:
             am = giai_ma(self.ffmpeg, mp3)
-            o = self.doi(am, self.se_dich(ref))
+            o = self.doi(am, self.se_dich(ref), g_src=self._se_nguon_cua(giong))
         o = np.clip(o, -1.0, 1.0)
         with wave.open(ra, "wb") as w:
             w.setnchannels(1)

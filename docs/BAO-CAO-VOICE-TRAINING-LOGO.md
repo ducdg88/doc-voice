@@ -2,14 +2,14 @@
 
 Ngày thực hiện: 19/10/2026.
 Phiên bản: Doc Voice v1.6.2.
-Thư mục dự án: `E:\DocGiong`.
+Thư mục dự án: thư mục gốc của Doc Voice.
 
 ---
 
 ## 1. THƯ MỤC VOICE TRAINING VÀ QUẢN LÝ GIỌNG ĐÃ HUẤN LUYỆN
 
 1. **Thư mục Voice Training**:
-   - Đã tạo thư mục chuẩn: `E:\DocGiong\Voice_Training`.
+   - Đã tạo thư mục chuẩn: `Voice_Training\` (trong thư mục dự án).
    - Có file hướng dẫn chi tiết: `Voice_Training\HUONG_DAN.txt`.
    - Mọi giọng người dùng nạp hoặc train sẽ được lưu trực tiếp vào đây.
 
@@ -34,12 +34,12 @@ Thư mục dự án: `E:\DocGiong`.
 ## 2. HIỂN THỊ CÂY THƯ MỤC KẾT QUẢ VÀ THÔNG BÁO HOÀN TẤT
 
 1. **Tuân thủ quy tắc lưu trữ**:
-   - Thư mục lưu kết quả mặc định đổi từ Documents sang thư mục dự án: `E:\DocGiong\ket_qua`.
+   - Thư mục lưu kết quả mặc định đổi từ Documents sang thư mục dự án: `ket_qua\`.
    - Hoàn toàn không lưu vào thư mục Documents.
 
 2. **Thanh hiển thị cây thư mục kết quả trên giao diện**:
    - Đặt ngay trên giao diện chính:
-     `📁 Thư mục kết quả: [ E:\DocGiong\ket_qua ] [Đổi thư mục...] [📂 Mở thư mục kết quả]`
+     `📁 Thư mục kết quả: [ ket_qua ] [Đổi thư mục...] [📂 Mở thư mục kết quả]`
    - Cho phép người dùng nhìn thấy ngay đường dẫn file sẽ lưu về đâu.
    - Có nút đổi thư mục và nút mở nhanh thư mục kết quả.
 

@@ -31,6 +31,10 @@ if ($KhongGiongMau) {
     $ra = 'dist\arthur'
     if (-not (Test-Path "$PSScriptRoot\giong_nhung\arthur\se.npy")) { throw "Thiếu giong_nhung\arthur\se.npy (chạy tao_dau_giong.py)" }
     $them += @('--add-data', "$PSScriptRoot\giong_nhung\arthur\se.npy;giong_nhung\arthur")
+    # Mọi dấu giọng khác trong giong_nhung (ví dụ tay-ban-nha-elevenlabs): chỉ se.npy, không âm thanh mẫu
+    foreach ($g in Get-ChildItem "$PSScriptRoot\giong_nhung" -Directory | Where-Object { $_.Name -ne 'arthur' }) {
+        if (Test-Path "$($g.FullName)\se.npy") { $them += @('--add-data', "$($g.FullName)\se.npy;giong_nhung\$($g.Name)") }
+    }
 } else {
     $them += @('--add-data', "$PSScriptRoot\giong_mau\arthur\ref.wav;giong_mau\arthur",
                '--add-data', "$PSScriptRoot\giong_mau\arthur\ref.txt;giong_mau\arthur")

@@ -108,6 +108,11 @@ GIONG_CLONE = {
     "arthur": {"ten": "Arthur (clone)", "gioi": "Nam", "locale": "en-US",
                "mo_ta": "Giọng nam Mỹ kể chuyện, audiobook, documentary",
                "quyen_dung": "Giọng Arthur dựng bằng tổng hợp giọng nói, kèm sẵn trong ứng dụng."},
+    # Giọng Tây Ban Nha: dấu giọng lấy từ mẫu ElevenLabs của chủ dự án (chỉ nhúng se.npy, không kèm âm thanh mẫu).
+    # Đọc mọi vùng tiếng Tây Ban Nha: chọn es-MX, es-AR... ở ô Ngôn ngữ thì giọng nguồn Edge theo vùng đó.
+    "tay-ban-nha-elevenlabs": {"ten": "Tây Ban Nha (clone)", "gioi": "Nam", "locale": "es-ES",
+                               "mo_ta": "Giọng đọc tiếng Tây Ban Nha, đọc được các vùng (España, México, Argentina...)",
+                               "quyen_dung": "Dấu giọng dựng từ mẫu tổng hợp của chủ dự án, kèm sẵn trong ứng dụng."},
 }
 
 KHUNG_MAY_DOC = 118          # khung ký tự mỗi lần sinh (giữ như cũ để chất lượng không đổi)
@@ -289,12 +294,46 @@ def chuan_hoa_tieng_anh(chu):
     return s
 
 
-def chu_cho_wer(chu):
-    """Chuẩn hoá để so lời: chữ thường, số -> chữ, bỏ dấu câu, gạch nối thành khoảng trắng."""
-    s = chuan_hoa_tieng_anh(chu).lower()
-    s = s.replace("-", " ")
-    s = re.sub(r"[^a-z0-9' ]+", " ", s)
-    s = s.replace("'", "")
+def ma_2_chu(ngon_ngu):
+    """Locale (es-ES) -> mã 2 chữ (es) cho whisper và chọn mẫu ngôn ngữ. Rỗng/không rõ -> 'en'."""
+    return (str(ngon_ngu or "en").split("-")[0].strip().lower() or "en")
+
+
+def _chuan_hoa_nhe(chu):
+    """Chuẩn hoá nhẹ, không phụ thuộc tiếng Anh: dùng cho ngôn ngữ khác tiếng Anh. Giữ nguyên số và chữ
+    (giọng neural Edge tự đọc số theo ngôn ngữ của nó), chỉ dọn dấu nháy cong, gạch dài, ba chấm và ký hiệu
+    làm máy đọc vấp. KHÔNG đổi số thành chữ tiếng Anh (sẽ đọc sai trong ngôn ngữ khác)."""
+    s = chu
+    s = s.replace("’", "\x27").replace("‘", "\x27").replace("“", "\x22").replace("”", "\x22")
+    s = re.sub(r"\s*[–—]\s*", ", ", s)          # gạch dài -> ngắt phẩy
+    s = s.replace("…", "...")
+    s = s.replace("&", " + ").replace("+", " + ")         # ký hiệu hay làm máy đọc vấp
+    s = re.sub(r"\s*[()\[\]]\s*", ", ", s)                # ngoặc giữa câu -> ngắt phẩy
+    s = re.sub(r"[*#_`~^|<>{}]", " ", s)
+    s = re.sub(r"(,\s*)+", ", ", s)
+    s = re.sub(r"^[,\s]+|,\s*(?=[.!?;:]|$)", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s+([,.!?;:])", r"\1", s)
+    return s
+
+
+def chuan_hoa(chu, ngon_ngu="en"):
+    """Chuẩn hoá chữ trước khi đưa máy đọc, theo ngôn ngữ: tiếng Anh dùng bộ đầy đủ (số, năm, %, $, đơn vị),
+    ngôn ngữ khác dùng bộ nhẹ (giữ số và chữ bản ngữ, chỉ dọn ký hiệu)."""
+    return chuan_hoa_tieng_anh(chu) if ma_2_chu(ngon_ngu) == "en" else _chuan_hoa_nhe(chu)
+
+
+def chu_cho_wer(chu, ngon_ngu="en"):
+    """Chuẩn hoá để so lời: chữ thường, bỏ dấu câu. Tiếng Anh: số -> chữ để so với whisper. Ngôn ngữ khác:
+    giữ số và chữ Unicode (whisper tiếng đó cũng trả chữ bản ngữ)."""
+    if ma_2_chu(ngon_ngu) == "en":
+        s = chuan_hoa_tieng_anh(chu).lower()
+        s = s.replace("-", " ")
+        s = re.sub(r"[^a-z0-9' ]+", " ", s)
+        s = s.replace("'", "")
+        return s.split()
+    s = _chuan_hoa_nhe(chu).lower().replace("-", " ")
+    s = re.sub(r"[^\w\s]", " ", s, flags=re.UNICODE)      # bỏ dấu câu, giữ chữ Unicode và số
     return s.split()
 
 
@@ -1417,7 +1456,8 @@ print(json.dumps({"san_sang": True}), flush=True)
 for dong in sys.stdin:
     try:
         yc = json.loads(dong)
-        segs, _ = m.transcribe(yc["wav"], language="en", beam_size=3, condition_on_previous_text=False)
+        lang = (yc.get("lang") or "en") or "en"
+        segs, _ = m.transcribe(yc["wav"], language=lang, beam_size=3, condition_on_previous_text=False)
         print(json.dumps({"chu": " ".join(s.text.strip() for s in segs)}), flush=True)
     except Exception as e:
         print(json.dumps({"loi": str(e)}), flush=True)
@@ -1478,10 +1518,10 @@ class KiemDoc:
     def co(self):
         return self.p is not None and self.p.poll() is None
 
-    def nghe(self, wav):
+    def nghe(self, wav, lang="en"):
         if not self.co:
             return None
-        self.p.stdin.write(json.dumps({"wav": wav}) + "\n")
+        self.p.stdin.write(json.dumps({"wav": wav, "lang": ma_2_chu(lang)}) + "\n")
         self.p.stdin.flush()
         r = json.loads(self.p.stdout.readline() or "{}")
         return r.get("chu")
@@ -1604,10 +1644,13 @@ class DocDaiClone:
     - moi_phan(i, thong_tin) gọi ngay khi một phần sẵn sàng để app phát luôn từ câu đầu."""
 
     def __init__(self, thu_muc_tam, may_doc=None, kiem=None, ffmpeg="", bao=None, dung=None,
-                 nguong_wer=None, so_lan_sinh=3, nguong_giong=None):
+                 nguong_wer=None, so_lan_sinh=3, nguong_giong=None, ngon_ngu="en", giong_nguon=None):
         self.thu_muc_tam = os.path.abspath(thu_muc_tam)
         self.may = may_doc or may_doc_chung()
         self.kiem = kiem
+        # Ngôn ngữ đọc (locale) và giọng nguồn Edge bản địa: máy Nhẹ đọc đúng phát âm ngôn ngữ đó rồi đổi chất giọng.
+        self.ngon_ngu = ngon_ngu or "en"
+        self.giong_nguon = giong_nguon
         self.ffmpeg = ffmpeg or tim_ffmpeg()
         self.bao = bao or (lambda chu, pt: None)
         self.dung = dung            # threading.Event: đặt thì dừng sau phần đang sinh
@@ -1636,8 +1679,8 @@ class DocDaiClone:
             x, sr = doc_wav(tam)
             dai = len(cat_lang(x, sr)) / sr
             giay_moi_tu = dai / so_tu
-            nghe = self.kiem.nghe(tam) if (kiem_ngay and self.kiem and self.kiem.co) else None
-            loi = wer(chu_cho_wer(chu_doc), chu_cho_wer(nghe)) if nghe is not None else None
+            nghe = self.kiem.nghe(tam, ma_2_chu(self.ngon_ngu)) if (kiem_ngay and self.kiem and self.kiem.co) else None
+            loi = wer(chu_cho_wer(chu_doc, self.ngon_ngu), chu_cho_wer(nghe, self.ngon_ngu)) if nghe is not None else None
             hop_ly = 0.17 <= giay_moi_tu <= 0.75 or so_tu < 3
             giong = None
             if do_giong is not None:
@@ -1697,9 +1740,11 @@ class DocDaiClone:
         if phat:
             phat("phan", phan=phan, viec=viec, san=san)
         self.may.bat(bao=lambda c: self.bao(c, 0))
+        if self.giong_nguon and hasattr(self.may, "giong_nguon"):
+            self.may.giong_nguon = self.giong_nguon     # máy Nhẹ dùng giọng nguồn Edge bản địa cho ngôn ngữ này
 
         def chu_doc_cua(i):
-            return chuan_hoa_tieng_anh(ap_cach_doc(phan[i]["chu"]) if ap_cach_doc else phan[i]["chu"])
+            return chuan_hoa(ap_cach_doc(phan[i]["chu"]) if ap_cach_doc else phan[i]["chu"], self.ngon_ngu)
 
         def tiep_theo():
             """Phần chưa có gần nhất tính từ uu_tien, vòng lại đầu bài nếu đã hết phía sau."""
@@ -1730,7 +1775,7 @@ class DocDaiClone:
                 k = f"{j:05d}"
                 rec = so["phan"][k]
                 w = os.path.join(viec, f"phan_{k}.wav")
-                loi = wer(chu_cho_wer(cd), chu_cho_wer(nghe)) if nghe is not None else None
+                loi = wer(chu_cho_wer(cd, self.ngon_ngu), chu_cho_wer(nghe, self.ngon_ngu)) if nghe is not None else None
                 rec.update({"wer": loi, "nghe": nghe})
                 tot = rec.pop("tot", None)
                 if tot is not None and os.path.isfile(w + ".tot.wav"):
@@ -1800,7 +1845,7 @@ class DocDaiClone:
             _ghi(file_so, so)
             san.add(i)
             if song_song:
-                cho_kiem[i] = (ex.submit(self.kiem.nghe, wav), chu_doc)
+                cho_kiem[i] = (ex.submit(self.kiem.nghe, wav, ma_2_chu(self.ngon_ngu)), chu_doc)
             if self.uu_tien == i:
                 self.uu_tien = i + 1 if i + 1 < len(phan) else 0
             if phat:

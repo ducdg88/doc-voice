@@ -8,7 +8,6 @@ def tao_logo_doc_voice(kich_thuoc=512):
     ss = 2
     size = kich_thuoc * ss
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
 
     # 1. Vẽ nền Bo tròn Squircle với viền phát quang
     pad = int(24 * ss)
@@ -95,7 +94,6 @@ def tao_logo_doc_voice(kich_thuoc=512):
     # Lưới mic (grille line ngang)
     for gy in range(mic_top + int(16 * ss), mic_bot - int(12 * ss), int(12 * ss)):
         # Chiều rộng tại độ cao gy
-        dy = gy - (mic_top + mic_w)
         gw = int(math.sqrt(max(0, mic_w**2 - (gy - (mic_top + mic_w))**2))) if gy < mic_top + mic_w else mic_w - int(4 * ss)
         gw = max(gw, int(mic_w * 0.7))
         mic_draw.line([(cx - gw + int(4*ss), gy), (cx + gw - int(4*ss), gy)],

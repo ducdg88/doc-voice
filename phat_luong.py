@@ -172,7 +172,10 @@ class PhatLuong:
                                 self.dang_phan = pi
                                 if pi in dau_phan and self.sr:
                                     self.lech_doi_phan[pi] = (max(0.0, (pos - dau_phan[pi]) / self.sr), time.time())
-                                self.khi_doi_phan(pi)
+                                try:
+                                    self.khi_doi_phan(pi)
+                                except Exception:
+                                    pass          # cửa sổ đã đóng: bỏ qua, không làm chết luồng phát
                             break
                 if dang_pause:
                     time.sleep(0.03)
@@ -250,15 +253,26 @@ class PhatLuong:
                         self.t_ghi_dau = time.time()
                 if vi_tri >= len(am):
                     i, am = i + 1, None
+        except Exception as e:                   # lỗi bất ngờ (ctypes, callback): ghi lại, không để luồng chết bẩn
+            self.loi = self.loi or f"Lỗi phát luồng: {e}"
         finally:
             if hwo:
-                _wm.waveOutReset(hwo)
-                self._don(hwo, dang_doi, tat_ca=True)
-                _wm.waveOutClose(hwo)
+                try:
+                    _wm.waveOutReset(hwo)
+                    self._don(hwo, dang_doi, tat_ca=True)
+                    _wm.waveOutClose(hwo)
+                except Exception:
+                    pass
             self.dang_phan = None
             if bat_dau_dem is not None:
-                self.khi_dem(False)
-            self.khi_het()
+                try:
+                    self.khi_dem(False)
+                except Exception:
+                    pass
+            try:
+                self.khi_het()
+            except Exception:
+                pass
 
     def _may_ban(self, i):
         """True nếu máy đọc đang bận: RTF trung bình các câu đã đọc vượt ngưỡng (ít câu thì ngưỡng nới). do_rtf lỗi

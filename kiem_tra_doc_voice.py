@@ -924,6 +924,229 @@ class KiemTraGiongClone(unittest.TestCase):
 
 
 
+class KiemTraDaNgonNgu(unittest.TestCase):
+    """Đọc chuẩn theo ngôn ngữ bản địa: chuẩn hoá và whisper theo ngôn ngữ, giọng nguồn Edge theo ngôn ngữ,
+    giọng clone truyền giọng nguồn xuống máy đọc. Khoá để không quay lại đọc mọi ngôn ngữ bằng giọng/âm tiếng Anh."""
+
+    def test_ma_2_chu(self):
+        self.assertEqual(gc.ma_2_chu("es-ES"), "es")
+        self.assertEqual(gc.ma_2_chu("vi-VN"), "vi")
+        self.assertEqual(gc.ma_2_chu(""), "en")
+        self.assertEqual(gc.ma_2_chu(None), "en")
+
+    def test_chuan_hoa_tieng_anh_khong_doi_hanh_vi(self):
+        # tiếng Anh vẫn chuyển số thành chữ như cũ (chuan_hoa dispatch về chuan_hoa_tieng_anh)
+        self.assertEqual(gc.chuan_hoa("I have 2024 houses and 50%", "en-US"),
+                         gc.chuan_hoa_tieng_anh("I have 2024 houses and 50%"))
+        self.assertIn("twenty twenty-four", gc.chuan_hoa("in 2024", "en"))
+
+    def test_chuan_hoa_ngon_ngu_khac_giu_so(self):
+        # tiếng Tây Ban Nha: KHÔNG đổi số thành chữ tiếng Anh (giọng Edge TBN tự đọc số theo tiếng của nó)
+        s = gc.chuan_hoa("Tengo 2024 casas y 50%", "es-ES")
+        self.assertIn("2024", s)
+        self.assertIn("50%", s)
+        self.assertNotIn("twenty", s)
+        self.assertNotIn("percent", s)
+        # vẫn dọn gạch dài và ngoặc để máy đọc không vấp
+        self.assertNotIn(chr(0x2014), gc.chuan_hoa("uno — dos", "es-ES"))
+        self.assertNotIn("(", gc.chuan_hoa("uno (dos) tres", "fr-FR"))
+
+    def test_chu_cho_wer_theo_ngon_ngu(self):
+        # tiếng Anh: số -> chữ để so với whisper (giữ như cũ)
+        self.assertEqual(gc.wer(gc.chu_cho_wer("Sealed for fifteen million years.", "en-US"),
+                                gc.chu_cho_wer("sealed for 15 million years", "en-US")), 0.0)
+        # ngôn ngữ khác: giữ số và chữ có dấu, không đổi số
+        toks = gc.chu_cho_wer("Hola, 2024 años", "es-ES")
+        self.assertIn("2024", toks)
+        self.assertIn("años", toks)
+
+    def test_giong_nguon_map_va_mac_dinh(self):
+        mn = doc_voice.mn
+        for ma in ("es", "fr", "de", "it", "pt", "vi", "ja", "ko", "zh"):
+            self.assertIn(ma, mn.GIONG_NGUON_THEO_NGON_NGU)
+        self.assertTrue(mn.GIONG_NGUON_THEO_NGON_NGU["es"].startswith("es-"))
+        self.assertEqual(mn.MayDocNhe().giong_nguon, mn.GIONG_EDGE_NGUON)   # mặc định Christopher, không đổi hành vi cũ
+        self.assertIn("es", mn.MAU_NGUON)                                   # có câu mẫu TBN để tính dấu giọng nguồn
+
+    def test_doc_dai_dat_giong_nguon_va_chuan_hoa_theo_ngon_ngu(self):
+        import tempfile
+        mn = doc_voice.mn
+        ghi = {"chu": [], "giong_nguon": None}
+
+        class MayGia:
+            ten = "gia"
+            giong_nguon = mn.GIONG_EDGE_NGUON          # có thuộc tính -> DocDaiClone đặt theo ngôn ngữ
+
+            def bat(self, **kw):
+                return {"loaded": True}
+
+            def sinh(self, chu, ref, ra, cfg=2.0, buoc=16, **kw):
+                ghi["chu"].append(chu)
+                ghi["giong_nguon"] = self.giong_nguon
+                sr = 48000
+                n = int(sr * 0.32 * max(1, len(chu.split())))
+                x = np.concatenate([np.zeros(2400), 0.2 * np.sin(2 * np.pi * 180 * np.arange(n) / sr), np.zeros(2400)])
+                gc.ghi_wav(ra, x, sr)
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tam:
+            ref = os.path.join(tam, "ref.wav")
+            gc.ghi_wav(ref, np.zeros(4800), 48000)
+            goc, goc_hk = gc.duong_mau, gc.hau_ky
+            gc.duong_mau = lambda slug: ref
+            gc.hau_ky = lambda ff, vao, mp3, wav="", **kw: open(mp3, "wb").close()
+            try:
+                doc = gc.DocDaiClone(tam, MayGia(), None, ffmpeg="ffmpeg-gia",
+                                     ngon_ngu="es-ES", giong_nguon="es-ES-AlvaroNeural")
+                doc.chay("Tengo 2024 libros.", "x", "Kể chuyện", os.path.join(tam, "ra.mp3"))
+            finally:
+                gc.duong_mau, gc.hau_ky = goc, goc_hk
+        self.assertEqual(ghi["giong_nguon"], "es-ES-AlvaroNeural")     # máy Nhẹ dùng giọng nguồn Edge TBN
+        self.assertTrue(any("2024" in c for c in ghi["chu"]))          # số không bị đổi thành chữ tiếng Anh
+
+    def test_whisper_nghe_truyen_ngon_ngu(self):
+        kiem = gc.KiemDoc.__new__(gc.KiemDoc)
+        ghi = []
+
+        class FakeStdin:
+            def write(self, s):
+                ghi.append(s)
+
+            def flush(self):
+                pass
+
+        class FakeStdout:
+            def readline(self):
+                return json.dumps({"chu": "hola"}) + "\n"
+
+        class FakeP:
+            def __init__(self):
+                self.stdin, self.stdout = FakeStdin(), FakeStdout()
+
+            def poll(self):
+                return None
+
+        kiem.p = FakeP()
+        self.assertEqual(kiem.nghe("x.wav", "es-ES"), "hola")
+        payload = json.loads(ghi[0])
+        self.assertEqual(payload["lang"], "es")          # whisper transcribe theo đúng ngôn ngữ, không ép "en"
+        self.assertEqual(payload["wav"], "x.wav")
+
+    def test_script_whisper_dung_ngon_ngu(self):
+        # tiến trình whisper đọc mã ngôn ngữ từ yêu cầu, không còn hard-code language="en"
+        self.assertIn('yc.get("lang")', gc._MA_KIEM)
+        self.assertNotIn('language="en"', gc._MA_KIEM)
+
+
+class KiemTraGiongCloneDaNgonNgu(unittest.TestCase):
+    """Giọng clone chọn được dưới mọi ngôn ngữ, đọc dùng giọng nguồn Edge bản địa; đóng app khi đang đọc
+    không gọi Tk sau khi cửa sổ bị huỷ (chống crash Tcl_AsyncDelete)."""
+
+    def _hop(self):
+        import tempfile
+        tam = tempfile.mkdtemp()
+        file_cd, file_giong = os.path.join(tam, "cd.json"), os.path.join(tam, "g.json")
+        cu = (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, gc.THU_MUC_GIONG, doc_voice.App._tai_giong,
+              gc.thu_muc_goc_app)
+        doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG = file_cd, file_giong
+        gc.THU_MUC_GIONG = os.path.join(tam, "giong_clone")
+        gc.thu_muc_goc_app = lambda: os.path.join(tam, "khong-co-giong-dong-goi")
+        doc_voice.App._tai_giong = lambda self: None
+        doc_voice.ghi_json(file_giong, [
+            {"ShortName": "en-US-ChristopherNeural", "Locale": "en-US", "Gender": "Male"},
+            {"ShortName": "es-ES-AlvaroNeural", "Locale": "es-ES", "Gender": "Male"},
+            {"ShortName": "es-ES-ElviraNeural", "Locale": "es-ES", "Gender": "Female"},
+            {"ShortName": "vi-VN-NamMinhNeural", "Locale": "vi-VN", "Gender": "Male"}])
+        d = os.path.join(gc.THU_MUC_GIONG, "voz-es")       # một giọng clone locale es-ES
+        os.makedirs(d, exist_ok=True)
+        gc.ghi_wav(os.path.join(d, "ref.wav"), np.zeros(4800, dtype=np.float32), 24000)
+        doc_voice.ghi_json(os.path.join(d, "voice.json"),
+                           {"slug": "voz-es", "ten": "Voz ES", "locale": "es-ES", "gioi": "Nam"})
+
+        def tra():
+            (doc_voice.FILE_CAI_DAT, doc_voice.FILE_GIONG, gc.THU_MUC_GIONG, doc_voice.App._tai_giong,
+             gc.thu_muc_goc_app) = cu
+            shutil.rmtree(tam, ignore_errors=True)
+        self.addCleanup(tra)
+        return tam, file_cd
+
+    def test_giong_clone_hien_duoi_ngon_ngu_khac_va_giong_nguon_ban_dia(self):
+        mn = doc_voice.mn
+        tam, file_cd = self._hop()
+        doc_voice.ghi_json(file_cd, {"ngon_ngu": "en-US", "giong": "en-US-ChristopherNeural",
+                                     "da_gioi_thieu_tu_dong": True})
+        app = mo_app_an(self)
+        app.ngon_ngu.current(app._locales.index("es-ES"))
+        app._nap_giong()
+        self.assertIn("clone:voz-es", app._ds_giong)                 # giọng clone hiện dưới es-ES
+        self.assertFalse(app._ds_giong[app.chon_giong.current()].startswith(gc.TIEN_TO_CLONE))  # mặc định vẫn Edge
+        self.assertEqual(app._giong_nguon_edge("es-ES"), "es-ES-AlvaroNeural")   # giọng nam es-ES bản địa
+        self.assertEqual(app._giong_nguon_edge("en-US"), mn.GIONG_EDGE_NGUON)    # tiếng Anh: Christopher
+        self.assertEqual(app._giong_nguon_edge("ja-JP"),
+                         mn.GIONG_NGUON_THEO_NGON_NGU["ja"])         # không có trong danh sách sống -> map cố định
+        app.chon_giong.current(app._ds_giong.index("clone:voz-es"))
+        self.assertEqual(app._ngon_ngu_doc_clone("voz-es"), "es-ES")  # chọn clone dưới es-ES -> đọc es-ES
+        app.ngon_ngu.current(app._locales.index(doc_voice.MA_CLONE))
+        self.assertEqual(app._ngon_ngu_doc_clone("voz-es"), "es-ES")  # nhóm ★clone -> theo locale của giọng
+
+    def test_luong_nen_khong_goi_after_tran(self):
+        """Luồng nền gọi self.after(0, ...) sau khi app đóng ném 'main thread is not in main loop' hoặc làm sập
+        tiến trình. Mọi lệnh hẹn 0 ms phải đi qua _an_toan_after."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(doc_voice.__file__)), "doc_voice.py"),
+                  encoding="utf-8") as f:
+            ma = f.read()
+        tran = [i + 1 for i, d in enumerate(ma.splitlines()) if "self.after(0," in d]
+        self.assertEqual(tran, [], f"Còn self.after(0, ...) trần ở dòng {tran}, dùng self._an_toan_after(0, ...)")
+
+    def test_giong_tay_ban_nha_nhung_san_cho_moi_may(self):
+        """Thành viên cập nhật exe là có giọng Tây Ban Nha: dấu giọng se.npy nằm trong giong_nhung (vào git, vào exe),
+        locale es-ES, không kèm âm thanh mẫu."""
+        goc = os.path.dirname(os.path.abspath(doc_voice.__file__))
+        slug = "tay-ban-nha-elevenlabs"
+        self.assertIn(slug, doc_voice.gc.GIONG_CLONE)
+        self.assertEqual(doc_voice.gc.GIONG_CLONE[slug]["locale"], "es-ES")
+        se = os.path.join(goc, "giong_nhung", slug, "se.npy")
+        self.assertTrue(os.path.isfile(se))
+        self.assertLess(os.path.getsize(se), 4096)
+        self.assertEqual([f for f in os.listdir(os.path.dirname(se)) if f != "se.npy"], [])
+        with open(os.path.join(goc, "dong-goi.ps1"), encoding="utf-8-sig") as f:
+            self.assertIn("giong_nhung\\$($g.Name)", f.read())
+
+    def test_nut_voice_training_mo_kho_giong_that(self):
+        """Trong exe THU_MUC_TRAINING nằm ở thư mục giải nén tạm; nút phải mở kho giọng app thật sự đọc."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(doc_voice.__file__)), "doc_voice.py"),
+                  encoding="utf-8") as f:
+            ma = f.read()
+        self.assertNotIn("os.startfile(gc.THU_MUC_TRAINING)", ma)
+        self.assertIn("os.startfile(gc.THU_MUC_GIONG)", ma)
+
+    def test_dong_app_khi_dang_doc_khong_goi_tk_sau_huy(self):
+        tam, file_cd = self._hop()
+        doc_voice.ghi_json(file_cd, {"da_gioi_thieu_tu_dong": True})
+        app = mo_app_an(self)
+        self.assertTrue(app._dang_song)
+        goi = []
+        app._an_toan_after(0, lambda: goi.append(1))
+        app.update()
+        self.assertEqual(goi, [1])
+        app._dang_song = False                       # mô phỏng app đang đóng
+        self.assertIsNone(app._an_toan_after(0, lambda: goi.append(2)))
+        app.update()
+        self.assertEqual(goi, [1])                   # luồng nền gọi after sau khi đóng: bị chặn, không vào Tk
+
+    def test_thoat_dat_dang_song_false(self):
+        tam, file_cd = self._hop()
+        doc_voice.ghi_json(file_cd, {"da_gioi_thieu_tu_dong": True})
+        app = mo_app_an(self)
+        goc = gc.dong_tat_ca_may
+        gc.dong_tat_ca_may = lambda: None
+        try:
+            app._thoat()
+        finally:
+            gc.dong_tat_ca_may = goc
+        self.assertFalse(app._dang_song)             # đóng rồi: cờ tắt, after nền không còn gọi Tk
+
+
 class KiemTraMayNheVaGoiGiong(unittest.TestCase):
     """gói giọng .dgvoice, máy đọc nhẹ, kịch bản YouTube một nút."""
 
@@ -1388,9 +1611,13 @@ class KiemTraChonSanArthur(unittest.TestCase):
             self.assertEqual(app._ds_giong[0], "clone:arthur")
             self.assertTrue(app.chon_giong["values"][0].startswith("★ Arthur"))
 
-    def test_ngon_ngu_khong_phai_tieng_anh_khong_chen_arthur(self):
+    def test_ngon_ngu_khong_phai_tieng_anh_co_clone_nhung_mac_dinh_edge(self):
+        # Giọng clone giờ hiện ở MỌI ngôn ngữ (để đọc được ngôn ngữ đó bằng giọng nguồn Edge bản địa), nhưng
+        # KHÔNG phải mặc định: ngôn ngữ khác tiếng Anh mặc định vẫn là giọng Edge, không tự nhảy sang Arthur.
         app = self._mo_app({"ngon_ngu": "vi-VN", "giong": "vi-VN-NamMinhNeural", "da_gioi_thieu_clone": True})
-        self.assertEqual(app._ds_giong, ["vi-VN-NamMinhNeural"])
+        self.assertEqual(app._ds_giong, ["clone:arthur", "vi-VN-NamMinhNeural"])
+        self.assertEqual(app._tham_so()[0], "vi-VN-NamMinhNeural")
+        self.assertFalse(app._ds_giong[app.chon_giong.current()].startswith(gc.TIEN_TO_CLONE))
 
 
 class KiemTraArthurNhung(unittest.TestCase):
@@ -2046,9 +2273,16 @@ class KiemTraGiongNhapVaGiuLuaChon(unittest.TestCase):
         app2 = self._mo()
         self.assertEqual(app2._tham_so()[0], "clone:thu-test")
         self.assertEqual(app2.cam_xuc.get(), "Trung tính")
-        # người dùng chủ động đổi sang giọng Edge: lưu ngay, mở lại vẫn giữ, không bị ép về giọng clone
+        # đổi NGÔN NGỮ sang vi-VN: giữ giọng clone đã nhớ (giọng clone nay đọc được mọi ngôn ngữ bằng giọng nguồn
+        # Edge bản địa), không bị mất giọng clone
         app2.ngon_ngu.current(app2._locales.index("vi-VN"))
         app2.ngon_ngu.event_generate("<<ComboboxSelected>>")
+        app2.update()
+        self.assertIn("clone:thu-test", app2._ds_giong)
+        self.assertEqual(app2._tham_so()[0], "clone:thu-test")
+        # người dùng chủ động chọn GIỌNG Edge trong ô Giọng: lưu ngay, mở lại vẫn giữ, không bị ép về giọng clone
+        app2.chon_giong.current(app2._ds_giong.index("vi-VN-NamMinhNeural"))
+        app2.chon_giong.event_generate("<<ComboboxSelected>>")
         app2.update()
         self.assertEqual(doc_voice.doc_json(file_cd, {})["giong"], "vi-VN-NamMinhNeural")
         app3 = self._mo()
@@ -2204,7 +2438,9 @@ class KiemTraMoApp(unittest.TestCase):
             self.assertEqual(ds[0], ("clone:arthur", "★ Arthur (clone) · Nam"))
             self.assertIn(loc, ds[1][0])
         self.assertNotIn("clone:arthur", [m for m, _ in doc_voice.danh_sach_giong("vi-VN", self.EDGE)])
-        self.assertEqual(doc_voice.danh_sach_giong("clone", self.EDGE), [("clone:arthur", "★ Arthur (clone) · Nam")])
+        nhom_clone = doc_voice.danh_sach_giong("clone", self.EDGE)
+        self.assertEqual(nhom_clone[0], ("clone:arthur", "★ Arthur (clone) · Nam"))      # Arthur vẫn đứng đầu
+        self.assertIn(("clone:tay-ban-nha-elevenlabs", "★ Tây Ban Nha (clone) · Nam"), nhom_clone)
         nho_william = {"ngon_ngu": "en-AU", "giong": "en-AU-WilliamNeural"}
         self.assertEqual(doc_voice.lua_chon_khi_mo(nho_william), ("clone", "clone:arthur"))
         self.assertEqual(doc_voice.lua_chon_khi_mo({**nho_william, doc_voice.KHOA_DA_CHUYEN_ARTHUR: True}),
@@ -3093,7 +3329,7 @@ class KiemTraProxyChetVaArthurLucMo(unittest.TestCase):
         doc_voice.gc.ds_giong = lambda: {"arthur": {"ten": "Arthur (clone)", "gioi": "Nam"}}
 
         def loi_mang(self):
-            self.after(0, lambda: self.trang_thai.set("Không tải được danh sách giọng: Cannot connect to host"))
+            self._an_toan_after(0, lambda: self.trang_thai.set("Không tải được danh sách giọng: Cannot connect to host"))
         doc_voice.App._tai_giong = loi_mang
 
         def tra():
